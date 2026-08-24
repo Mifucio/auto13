@@ -3,7 +3,7 @@ Feature: Create, sign and review the disposable Interest Payment application
 
   Scenario: Create and preserve one disposable Interest Payment draft
     Given I log in through Mobile ID for the disposable application
-    And I select company "AutotestLtSingleSignee" for the disposable application
+    And I select and verify company "AutotestLtSingleSignee" for the disposable application
     When I open Corporate Actions from the customer menu
     And I click Create Application
     And I choose the last "Interest Payment" application type
