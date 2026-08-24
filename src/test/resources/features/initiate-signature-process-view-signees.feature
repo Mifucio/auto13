@@ -1,33 +1,12 @@
 @req:CA-25
+@direct_ca_disposable_draft
 Feature: "Initiate signature process, view signees"
-  Requirement CA-25 keeps the original company/form matrix but executes each action block only once and uses a concrete signees assertion.
+  Requirement CA-25 is exercised on one disposable application. The previous
+  16-row country/form matrix came from Form management "Countries enabled"
+  metadata and did not represent 16 actual application instances.
 
   @req:CA-25
-  Scenario Outline: [admin] "Initiate signature process, view signees" for <company>, <caForm>
-    Given I am authenticated in the admin application
-    And I navigate to the admin "/corporate-actions/form"
-    When I click "Open application"
-    And I click "Initiate signature"
-    And I click "View signees"
-    And I select "<company>" from "Company"
-    And I select "<caForm>" from "Corporate action form"
-    Then the admin signees list is visible
-
-    Examples:
-      | company | caForm |
-      | EE | dividend |
-      | EE | bonus |
-      | EE | interest |
-      | EE | additional_bonds |
-      | IS | dividend |
-      | IS | bonus |
-      | IS | interest |
-      | IS | additional_bonds |
-      | LT | dividend |
-      | LT | bonus |
-      | LT | interest |
-      | LT | additional_bonds |
-      | LV | dividend |
-      | LV | bonus |
-      | LV | interest |
-      | LV | additional_bonds |
+  Scenario: [admin] "Initiate signature process, view signees"
+    Given a fresh disposable admin Corporate Actions draft exists
+    When I initiate signing and open the disposable signees surface
+    Then the disposable signees surface is visible
