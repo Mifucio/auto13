@@ -12,9 +12,8 @@ Feature: Create, sign and review the disposable Bonus Issue application
     Then the Sign Document button must be visible
     And I persist the disposable application ID and remembered source instrument
 
-  Scenario: Sign the saved disposable Bonus Issue application and download the signed document
-    Given the disposable application type is "Bonus Issue"
-    And I open the saved disposable "Bonus Issue" application
+  Scenario: Sign a disposable Bonus Issue application and download the signed document
+    Given a fresh saved disposable "Bonus Issue" application exists
     When I click Sign Document for the disposable application
     Then the Signatures tab and Initiate signing process must be visible
     When I initiate the signing process
@@ -25,14 +24,12 @@ Feature: Create, sign and review the disposable Bonus Issue application
     When I download the signed disposable document
     Then the signed document must exist in the file system
 
-  Scenario: View the History tab of the saved disposable Bonus Issue application
-    Given the disposable application type is "Bonus Issue"
-    And I open the saved disposable "Bonus Issue" application
+  Scenario: View the History tab of a disposable Bonus Issue application
+    Given a fresh saved disposable "Bonus Issue" application exists
     When I open the "History" tab of the disposable application
     Then the disposable application History must show the created application and, if signed, the signed application
 
-  Scenario: View the Attachments tab of the saved disposable Bonus Issue application
-    Given the disposable application type is "Bonus Issue"
-    And I open the saved disposable "Bonus Issue" application
+  Scenario: View the Attachments tab of a disposable Bonus Issue application
+    Given a fresh saved disposable "Bonus Issue" application exists
     When I open the "Attachments" tab of the disposable application
     Then the disposable application Attachments tab is entered

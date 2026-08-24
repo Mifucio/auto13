@@ -1,0 +1,67 @@
+package steps;
+
+import com.codeborne.selenide.SelenideElement;
+import io.cucumber.java.en.Given;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+import static com.codeborne.selenide.Condition.text;
+import static com.codeborne.selenide.Condition.visible;
+import static com.codeborne.selenide.Selenide.$;
+import static com.codeborne.selenide.Selenide.$$;
+import static com.codeborne.selenide.Selenide.sleep;
+
+/**
+ * Makes disposable Corporate Actions scenarios independent from the execution
+ * order of other Cucumber scenarios.  The previous suite expected a contract
+ * file created by an earlier scenario; selective runs and retries therefore
+ * failed before exercising the requested behavior.
+ */
+public final class DisposableScenarioPrerequisites {
+  private static final String DEFAULT_COMPANY = "AutotestLtSingleSignee";
+
+  private final DisposableDividendSteps flow;
+
+  public DisposableScenarioPrerequisites(DisposableDividendSteps flow) {
+    this.flow = flow;
+  }
+
+  @Given("a fresh saved disposable {string} application exists")
+  public void freshSavedDisposableApplication(String type) throws Exception {
+    flow.login();
+    flow.selectCompany(DEFAULT_COMPANY);
+    assertOrRepairCompanyContext(DEFAULT_COMPANY);
+    flow.openCorporateActions();
+    flow.clickCreateApplication();
+    flow.chooseLastApplicationType(type);
+    flow.formVisible();
+    flow.fillDisposableApplicationAndSaveDraft(type);
+    flow.signDocumentVisibleStep();
+    flow.persistContract();
+  }
+
+  private static void assertOrRepairCompanyContext(String company) {
+    SelenideElement selected = $("#navbarRepresentedDropdown").shouldBe(visible);
+    if (normalized(selected.getText()).contains(normalized(company))) return;
+
+    selected.click();
+    sleep(250);
+    List<SelenideElement> matches = new ArrayList<>();
+    for (SelenideElement candidate : $$("a,button,[role=menuitem],[role=button],li,div,span")) {
+      if (!candidate.isDisplayed() || !candidate.isEnabled()) continue;
+      String label = normalized(candidate.getText());
+      if (label.equals(normalized(company))) matches.add(candidate);
+    }
+    if (matches.isEmpty()) {
+      throw new AssertionError("Authenticated session represents a different company and the requested company was not selectable: " + company);
+    }
+    matches.get(matches.size() - 1).click();
+    $("#navbarRepresentedDropdown").shouldHave(text(company));
+  }
+
+  private static String normalized(String value) {
+    return value == null ? "" : value.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim().toLowerCase(Locale.ROOT);
+  }
+}
