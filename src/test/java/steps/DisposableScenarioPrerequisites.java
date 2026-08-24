@@ -33,6 +33,7 @@ public final class DisposableScenarioPrerequisites {
   public void freshSavedDisposableApplication(String type) throws Exception {
     flow.login();
     selectAndVerifyCompany(DEFAULT_COMPANY);
+    CustomerRepairSteps.ensureCustomerEnglish();
     flow.openCorporateActions();
     flow.clickCreateApplication();
     flow.chooseLastApplicationType(type);
