@@ -34,6 +34,7 @@ public final class BrowserBootstrapHooks {
 
     Path logPath = portableDriverLogPath();
     System.setProperty("webdriver.chrome.logfile", logPath.toString());
+    System.out.println("BROWSER_BOOTSTRAP driver_log=" + logPath);
 
     String browser = env("OHTEST_BROWSER");
     if (browser.isBlank()) browser = "chrome";
