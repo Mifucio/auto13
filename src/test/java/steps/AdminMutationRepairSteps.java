@@ -15,7 +15,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
@@ -23,7 +22,7 @@ import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
 /**
- * Repair steps for the data-changing admin scenarios.  Every scenario using
+ * Repair steps for the data-changing admin scenarios. Every scenario using
  * these steps starts from a disposable CA-23 draft and carries the
  * @direct_ca_disposable_draft tag, so Ca23Steps deletes the application after
  * the scenario instead of mutating the shared LV/Bonus read-only fixture.
@@ -145,7 +144,7 @@ public final class AdminMutationRepairSteps {
     while (System.currentTimeMillis() < deadline) {
       String body = lower(bodyText());
       boolean semantic = body.contains("signee") || body.contains("signer");
-      boolean structured = !$$(("table tbody tr, [role=row], ul li")).filterBy(visible).isEmpty();
+      boolean structured = $$("table tbody tr, [role=row], ul li").filterBy(visible).size() > 0;
       if (semantic && structured) return;
       sleep(200);
     }
