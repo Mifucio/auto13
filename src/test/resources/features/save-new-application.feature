@@ -4,7 +4,7 @@ Feature: Create disposable Dividend Payment application
   @req:CA-23 @direct_disposable_dividend
   Scenario: Create and preserve one disposable Dividend Payment draft
     Given I log in through Mobile ID for the disposable application
-    And I select company "AutotestLtSingleSignee" for the disposable application
+    And I select and verify company "AutotestLtSingleSignee" for the disposable application
     When I open Corporate Actions from the customer menu
     And I click Create Application
     And I choose the last "Dividend Payment" application type
