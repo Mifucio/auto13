@@ -66,6 +66,18 @@ tasks.test {
   jvmArgs("-Djava.net.preferIPv4Stack=true")
   systemProperty("allure.results.directory", file("build/allure-results").absolutePath)
 
+  // Make Cucumber/step diagnostics and full root-cause stack traces visible in
+  // the terminal. Persistent per-scenario copies are also written by
+  // runner.FailureLoggingPlugin under build/failure-logs/<run-id>/.
+  testLogging {
+    events("failed", "skipped")
+    exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    showExceptions = true
+    showCauses = true
+    showStackTraces = true
+    showStandardStreams = true
+  }
+
   // ── Cucumber tag-scoping ──────────────────────────────────────
   // `-Pcucumber.filter.tags=@tag` (or `-Dcucumber.filter.tags=@tag`) scopes the
   // run to scenarios carrying the given tag.  Forward to the forked test JVM so
