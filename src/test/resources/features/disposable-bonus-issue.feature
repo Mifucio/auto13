@@ -4,6 +4,7 @@ Feature: Create, sign and review the disposable Bonus Issue application
   Scenario: Create and preserve one disposable Bonus Issue draft
     Given I log in through Mobile ID for the disposable application
     And I select and verify company "AutotestLtSingleSignee" for the disposable application
+    And I ensure customer application language is English
     When I open Corporate Actions from the customer menu
     And I click Create Application
     And I choose the last "Bonus Issue" application type

@@ -14,7 +14,7 @@ import static io.cucumber.junit.platform.engine.Constants.*;
 @SelectClasspathResource("features")
 @ConfigurationParameter(key = GLUE_PROPERTY_NAME, value = "steps")
 @ConfigurationParameter(key = PLUGIN_PROPERTY_NAME,
-  value = "pretty, json:target/allure-results/cucumber-report.json, io.qameta.allure.cucumber7jvm.AllureCucumber7Jvm")
+  value = "pretty, runner.FailureLoggingPlugin, json:target/allure-results/cucumber-report.json, io.qameta.allure.cucumber7jvm.AllureCucumber7Jvm")
 @ConfigurationParameter(key = "cucumber.publish.quiet", value = "true")
 public class TestRunner {
   // JUnit Platform Suite will discover and run all Cucumber features

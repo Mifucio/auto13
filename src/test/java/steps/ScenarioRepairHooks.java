@@ -8,6 +8,7 @@ import io.cucumber.java.Scenario;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.devtools.HasDevTools;
 import org.openqa.selenium.devtools.v127.fetch.Fetch;
+import org.openqa.selenium.devtools.v127.network.Network;
 
 import java.net.URI;
 import java.nio.file.Files;
@@ -15,19 +16,18 @@ import java.nio.file.Path;
 import java.util.Comparator;
 
 import static com.codeborne.selenide.Selenide.open;
-import static steps.RuntimeState.*;
 
 /**
  * Repair-time scenario isolation shared by the generated suite.
  *
  * The original harness inferred the initial application only from filenames
  * beginning with "admin-", while the current suite uses *-int.feature and
- * [admin] scenario names.  That left many INT scenarios starting on the
- * customer origin.  This hook runs after the generated default hook and binds
+ * [admin] scenario names. That left many INT scenarios starting on the
+ * customer origin. This hook runs after the generated default hook and binds
  * each scenario to the correct application origin before its first step.
  *
- * It also clears run-local network bookkeeping and stale default downloads so
- * a scenario cannot pass because of requests or files left by a previous one.
+ * It also clears run-local network bookkeeping, stale downloads, and browser
+ * authentication state so a later scenario cannot inherit a previous login.
  */
 public final class ScenarioRepairHooks {
 
@@ -55,6 +55,7 @@ public final class ScenarioRepairHooks {
     PENDING_DATA_REQUESTS.clear();
     lastDataActivityAt = 0;
     disableChromeFetchInterception();
+    clearBrowserAuthenticationState();
   }
 
   private static String featureName(Scenario scenario) {
@@ -118,6 +119,29 @@ public final class ScenarioRepairHooks {
       }
     } catch (Throwable ignored) {
       // Firefox and drivers without a CDP Fetch session have nothing to disable.
+    }
+  }
+
+  private static void clearBrowserAuthenticationState() {
+    if (!WebDriverRunner.hasWebDriverStarted()) return;
+    WebDriver driver = WebDriverRunner.getWebDriver();
+
+    try {
+      com.codeborne.selenide.Selenide.executeJavaScript(
+        "try{window.localStorage.clear();}catch(e){} try{window.sessionStorage.clear();}catch(e){}");
+    } catch (Throwable ignored) { }
+
+    // WebDriver's deleteAllCookies can be origin-scoped. CDP clearBrowserCookies
+    // clears the complete Chrome cookie store, preventing a customer session
+    // from resurfacing after intervening admin scenarios.
+    try {
+      if (driver instanceof HasDevTools hasDevTools) {
+        hasDevTools.getDevTools().send(Network.clearBrowserCookies());
+      } else {
+        driver.manage().deleteAllCookies();
+      }
+    } catch (Throwable ignored) {
+      try { driver.manage().deleteAllCookies(); } catch (Throwable ignoredAgain) { }
     }
   }
 }
