@@ -1,22 +1,29 @@
 package steps;
 
+import com.codeborne.selenide.Configuration;
 import io.cucumber.java.BeforeAll;
+import org.openqa.selenium.Capabilities;
+import org.openqa.selenium.chrome.ChromeOptions;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Normalizes browser-driver startup before any scenario opens a WebDriver.
  *
- * RuntimeState historically auto-pinned /usr/local/bin/chromedriver whenever
- * that file existed and always sent ChromeDriver logs to /tmp. Both assumptions
- * are unsafe for developer machines and mixed runner images: a stale/wrong-arch
- * driver dies before a session is created, and /tmp is not a portable Windows
- * path. This preflight intentionally runs once for the whole suite.
+ * The suite used to auto-pin a driver and reuse one persistent Chrome profile
+ * across runs. A stale/locked profile can make Chrome exit before creating
+ * DevToolsActivePort, which then surfaces as SessionNotCreatedException for
+ * every scenario. This preflight runs once and gives Chrome an isolated profile
+ * unless CHROME_PROFILE was explicitly supplied by the operator.
  */
 public final class BrowserBootstrapHooks {
   private BrowserBootstrapHooks() { }
@@ -24,8 +31,8 @@ public final class BrowserBootstrapHooks {
   @BeforeAll
   public static void normalizeDriverBootstrap() {
     // Force RuntimeState's configuration block to run now, before any @Before
-    // hook opens a browser. We can then correct only the process-level driver
-    // settings without changing the 11 golden scenario flows.
+    // hook opens a browser. We can then correct only bootstrap settings without
+    // changing the user-visible behavior of the golden scenarios.
     try {
       Class.forName("steps.RuntimeState");
     } catch (ClassNotFoundException error) {
@@ -53,6 +60,83 @@ public final class BrowserBootstrapHooks {
 
     System.clearProperty("webdriver.edge.driver");
     normalizeExplicitDriver("CHROMEDRIVER_PATH", "webdriver.chrome.driver", "ChromeDriver");
+    isolateChromeProfile();
+  }
+
+  /**
+   * Rebuild only the suite-supplied Chrome capabilities, replacing the old
+   * persistent --user-data-dir with a fresh profile for this JVM run. Chrome's
+   * mTLS certificate on Windows/macOS comes from the OS certificate store; the
+   * AutoSelectCertificateForUrls preference is preserved below.
+   */
+  private static void isolateChromeProfile() {
+    Capabilities current = Configuration.browserCapabilities;
+    if (current == null) return;
+
+    ChromeOptions replacement = new ChromeOptions();
+    Object acceptInsecure = current.getCapability("acceptInsecureCerts");
+    if (acceptInsecure instanceof Boolean value) replacement.setAcceptInsecureCerts(value);
+
+    Object loggingPrefs = current.getCapability("goog:loggingPrefs");
+    if (loggingPrefs != null) replacement.setCapability("goog:loggingPrefs", loggingPrefs);
+
+    Object rawVendor = current.getCapability(ChromeOptions.CAPABILITY);
+    Map<?, ?> vendor = rawVendor instanceof Map<?, ?> map ? map : Map.of();
+
+    Object prefs = vendor.get("prefs");
+    if (prefs instanceof Map<?, ?> map) {
+      Map<String, Object> copiedPrefs = new HashMap<>();
+      for (Map.Entry<?, ?> entry : map.entrySet()) {
+        if (entry.getKey() != null) copiedPrefs.put(String.valueOf(entry.getKey()), entry.getValue());
+      }
+      replacement.setExperimentalOption("prefs", copiedPrefs);
+    }
+
+    Object excludeSwitches = vendor.get("excludeSwitches");
+    if (excludeSwitches instanceof List<?> list) {
+      replacement.setExperimentalOption("excludeSwitches", new ArrayList<>(list));
+    }
+
+    Object binary = vendor.get("binary");
+    if (binary instanceof String value && !value.isBlank()) replacement.setBinary(value);
+
+    Object rawArgs = vendor.get("args");
+    if (rawArgs instanceof List<?> list) {
+      List<String> preserved = new ArrayList<>();
+      for (Object raw : list) {
+        if (!(raw instanceof String arg)) continue;
+        if (arg.startsWith("--user-data-dir=")) continue;
+        preserved.add(arg);
+      }
+      if (!preserved.isEmpty()) replacement.addArguments(preserved);
+    }
+
+    Path profile = chromeProfilePath();
+    replacement.addArguments("--user-data-dir=" + profile);
+    Configuration.browserCapabilities = replacement;
+
+    String source = env("CHROME_PROFILE").isBlank() ? "isolated-temp" : "explicit";
+    System.out.println("BROWSER_BOOTSTRAP chrome_profile_source=" + source + " path=" + profile);
+  }
+
+  private static Path chromeProfilePath() {
+    String explicit = env("CHROME_PROFILE");
+    try {
+      if (!explicit.isBlank()) {
+        Path profile = Path.of(explicit).toAbsolutePath().normalize();
+        Files.createDirectories(profile);
+        return profile;
+      }
+
+      String temp = System.getProperty("java.io.tmpdir", "").trim();
+      Path root = temp.isBlank()
+        ? Path.of("build", "chrome-profiles").toAbsolutePath().normalize()
+        : Path.of(temp).toAbsolutePath().normalize();
+      Files.createDirectories(root);
+      return Files.createTempDirectory(root, "auto13-chrome-profile-").toAbsolutePath().normalize();
+    } catch (IOException error) {
+      throw new AssertionError("Could not prepare an isolated Chrome profile", error);
+    }
   }
 
   private static void normalizeExplicitDriver(String envName, String propertyName, String displayName) {
