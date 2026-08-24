@@ -1,0 +1,16 @@
+.gradle/
+build/
+out/
+target/
+observability/
+reports/
+*.log
+*.iml
+.idea/
+credentials.local.properties
+*.p12
+*.pfx
+*.pem
+*.key
+allure-report/
+allure-results/
