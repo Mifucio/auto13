@@ -10,4 +10,4 @@ Feature: "Create application → open new form creation page"
     And I select the observed company "Nasdaq CSD SE LT Branch" to represent
     And I navigate to "/corporate-actions"
     When I open the observed application creation page
-    Then form_creation_page
+    Then the Application data form must be visible

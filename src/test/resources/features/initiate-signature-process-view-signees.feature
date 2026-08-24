@@ -1,24 +1,17 @@
 @req:CA-25
 Feature: "Initiate signature process, view signees"
-  Requirement CA-25 grounded at /corporate-actions/form via goto /login · login(Log In) · submit · goto /corporate-actions/form
+  Requirement CA-25 keeps the original company/form matrix but executes each action block only once and uses a concrete signees assertion.
 
   @req:CA-25
   Scenario Outline: [admin] "Initiate signature process, view signees" for <company>, <caForm>
-    Given I navigate to the admin "/login"
-    And I am on the admin application
-    And I submit the observed form
+    Given I am authenticated in the admin application
     And I navigate to the admin "/corporate-actions/form"
     When I click "Open application"
     And I click "Initiate signature"
     And I click "View signees"
     And I select "<company>" from "Company"
     And I select "<caForm>" from "Corporate action form"
-    When I click "Open application"
-    And I click "Initiate signature"
-    And I click "View signees"
-    And I select "<company>" from "Company"
-    And I select "<caForm>" from "Corporate action form"
-    Then signees_list_visible
+    Then the admin signees list is visible
 
     Examples:
       | company | caForm |
@@ -38,4 +31,3 @@ Feature: "Initiate signature process, view signees"
       | LV | bonus |
       | LV | interest |
       | LV | additional_bonds |
-

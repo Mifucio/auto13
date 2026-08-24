@@ -1,18 +1,9 @@
 @req:CA-33
+@direct_ca_disposable_draft
 Feature: "Assign Application to internal user"
-  Requirement CA-33 grounded at /corporate-actions/form via goto /login · login(Log In) · submit · goto /corporate-actions/form
 
   @req:CA-33
   Scenario: [admin] "Assign Application to internal user"
-    Given I navigate to the admin "/login"
-    And I am on the admin application
-    And I submit the observed form
-    And I navigate to the admin "/corporate-actions/form"
-    When I click "Open application"
-    And I click "Assign internal user"
-    And I click "Save assignment"
-    When I click "Open application"
-    And I click "Assign internal user"
-    And I click "Save assignment"
-    Then assignment_saved
-
+    Given a fresh disposable admin Corporate Actions draft exists
+    When I assign the disposable application to an available internal user
+    Then the disposable assignment is saved

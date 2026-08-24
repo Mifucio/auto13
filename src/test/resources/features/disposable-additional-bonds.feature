@@ -3,7 +3,7 @@ Feature: Create, sign and review the disposable Additional issuance of Bonds app
 
   Scenario: Create and preserve one disposable Additional issuance of Bonds draft
     Given I log in through Mobile ID for the disposable application
-    And I select company "AutotestLtSingleSignee" for the disposable application
+    And I select and verify company "AutotestLtSingleSignee" for the disposable application
     When I open Corporate Actions from the customer menu
     And I click Create Application
     And I choose the last "Additional issuance of Bonds" application type
@@ -12,9 +12,8 @@ Feature: Create, sign and review the disposable Additional issuance of Bonds app
     Then the Sign Document button must be visible
     And I persist the disposable application ID and remembered source instrument
 
-  Scenario: Sign the saved disposable Additional issuance of Bonds application and download the signed document
-    Given the disposable application type is "Additional issuance of Bonds"
-    And I open the saved disposable "Additional issuance of Bonds" application
+  Scenario: Sign a disposable Additional issuance of Bonds application and download the signed document
+    Given a fresh saved disposable "Additional issuance of Bonds" application exists
     When I click Sign Document for the disposable application
     Then the Signatures tab and Initiate signing process must be visible
     When I initiate the signing process
@@ -25,14 +24,12 @@ Feature: Create, sign and review the disposable Additional issuance of Bonds app
     When I download the signed disposable document
     Then the signed document must exist in the file system
 
-  Scenario: View the History tab of the saved disposable Additional issuance of Bonds application
-    Given the disposable application type is "Additional issuance of Bonds"
-    And I open the saved disposable "Additional issuance of Bonds" application
+  Scenario: View the History tab of a disposable Additional issuance of Bonds application
+    Given a fresh saved disposable "Additional issuance of Bonds" application exists
     When I open the "History" tab of the disposable application
     Then the disposable application History must show the created application and, if signed, the signed application
 
-  Scenario: View the Attachments tab of the saved disposable Additional issuance of Bonds application
-    Given the disposable application type is "Additional issuance of Bonds"
-    And I open the saved disposable "Additional issuance of Bonds" application
+  Scenario: View the Attachments tab of a disposable Additional issuance of Bonds application
+    Given a fresh saved disposable "Additional issuance of Bonds" application exists
     When I open the "Attachments" tab of the disposable application
     Then the disposable application Attachments tab is entered
