@@ -90,6 +90,15 @@ tasks.register("resolveTestRuntimeClasspath") {
   }
 }
 
+// Isolate WebDriver/ChromeDriver startup from credentials, mTLS and SETS. Run
+// this before a full live suite when the failure is SessionNotCreatedException.
+tasks.register<JavaExec>("browserSmoke") {
+  dependsOn(tasks.compileTestJava)
+  classpath = sourceSets["test"].runtimeClasspath
+  mainClass.set("runner.BrowserSmoke")
+  jvmArgs("-Djava.net.preferIPv4Stack=true")
+}
+
 // The Allure CLI is an optional operator concern and is not put on the test
 // runtime classpath. Install it separately when a local HTML report is needed.
 
