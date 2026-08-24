@@ -31,6 +31,10 @@ public final class FailureLoggingPlugin implements ConcurrentEventListener {
   private static final Path RUN_DIR = Path.of("build", "failure-logs", RUN_ID).toAbsolutePath().normalize();
   private static final Map<String, StepFailure> FIRST_STEP_FAILURE = new ConcurrentHashMap<>();
 
+  public FailureLoggingPlugin() {
+    System.err.println("FAILURE_LOG_DIR " + RUN_DIR);
+  }
+
   @Override
   public void setEventPublisher(EventPublisher publisher) {
     publisher.registerHandlerFor(TestStepFinished.class, this::onStepFinished);
