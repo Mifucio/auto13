@@ -1,6 +1,7 @@
 package steps;
 
 import com.codeborne.selenide.SelenideElement;
+import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
 
 import java.util.ArrayList;
@@ -15,9 +16,9 @@ import static com.codeborne.selenide.Selenide.sleep;
 
 /**
  * Makes disposable Corporate Actions scenarios independent from the execution
- * order of other Cucumber scenarios.  The previous suite expected a contract
- * file created by an earlier scenario; selective runs and retries therefore
- * failed before exercising the requested behavior.
+ * order of other Cucumber scenarios. The wrapper also verifies the represented
+ * company after session reuse, because presence of the navbar alone does not
+ * prove that the requested company is active.
  */
 public final class DisposableScenarioPrerequisites {
   private static final String DEFAULT_COMPANY = "AutotestLtSingleSignee";
@@ -31,8 +32,7 @@ public final class DisposableScenarioPrerequisites {
   @Given("a fresh saved disposable {string} application exists")
   public void freshSavedDisposableApplication(String type) throws Exception {
     flow.login();
-    flow.selectCompany(DEFAULT_COMPANY);
-    assertOrRepairCompanyContext(DEFAULT_COMPANY);
+    selectAndVerifyCompany(DEFAULT_COMPANY);
     flow.openCorporateActions();
     flow.clickCreateApplication();
     flow.chooseLastApplicationType(type);
@@ -40,6 +40,12 @@ public final class DisposableScenarioPrerequisites {
     flow.fillDisposableApplicationAndSaveDraft(type);
     flow.signDocumentVisibleStep();
     flow.persistContract();
+  }
+
+  @And("I select and verify company {string} for the disposable application")
+  public void selectAndVerifyCompany(String company) {
+    flow.selectCompany(company);
+    assertOrRepairCompanyContext(company);
   }
 
   private static void assertOrRepairCompanyContext(String company) {
