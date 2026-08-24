@@ -3,7 +3,7 @@ Feature: Create, sign and review the disposable Additional issuance of Bonds app
 
   Scenario: Create and preserve one disposable Additional issuance of Bonds draft
     Given I log in through Mobile ID for the disposable application
-    And I select company "AutotestLtSingleSignee" for the disposable application
+    And I select and verify company "AutotestLtSingleSignee" for the disposable application
     When I open Corporate Actions from the customer menu
     And I click Create Application
     And I choose the last "Additional issuance of Bonds" application type
