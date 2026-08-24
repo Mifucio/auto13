@@ -986,13 +986,15 @@ public final class AuthSupport {
 
   static void fillByLabel(String label, String value) {
     if ("Search query".equals(label)) {
-      SelenideElement observedSearch = $("input[type=search][name=search]");
-      try {
-        observedSearch.shouldBe(visible).setValue(value);
-        return;
-      } catch (Throwable notReady) {
-        // Fall through to the diagnostic inventory below so a changed live DOM
-        // produces an actionable failure rather than an arbitrary click.
+      // Quick poll for the search field instead of waiting the full 70s timeout
+      long deadline = System.currentTimeMillis() + 10000;
+      while (System.currentTimeMillis() < deadline) {
+        SelenideElement observedSearch = $("input[type=search][name=search]");
+        if (observedSearch.exists() && observedSearch.isDisplayed()) {
+          observedSearch.setValue(value);
+          return;
+        }
+        sleep(200);
       }
     }
     List<SelenideElement> matches = new ArrayList<>();

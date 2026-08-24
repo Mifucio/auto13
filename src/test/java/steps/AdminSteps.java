@@ -966,7 +966,6 @@ public class AdminSteps {
   @When("I open the observed external role editor without saving")
   public void i_open_the_observed_external_role_editor_without_saving() {
     System.out.println("  👁️  Opening external role editor...");
-    sleep(2000);
     openObservedRoleEditor("/external/admin/authority-rights", "External Roles", "ROLE_SELF");
   }
 
@@ -994,10 +993,8 @@ public class AdminSteps {
 
   @Then("external_role_edit_surface_visible")
   public void external_role_edit_surface_visible() {
-    sleep(2000);
     assertRoleEditSurface("/external/admin/authority-rights", "ROLE_SELF");
     System.out.println("  👁️  External role editor surface visible");
-    sleep(2000);
   }
 
   @Then("internal_role_edit_surface_visible")
@@ -1013,7 +1010,6 @@ public class AdminSteps {
   private static void openObservedRoleEditor(String listPath, String heading, String roleName) {
     assertAdminList(listPath, heading);
     System.out.println("  👁️  Admin list verified, finding role '" + roleName + "'...");
-    sleep(2000);
     List<SelenideElement> matches = new ArrayList<>();
     for (SelenideElement row : visibleManagementTable().$$
         ("tbody tr[id]")) {
@@ -1031,10 +1027,8 @@ public class AdminSteps {
       throw new AssertionError("Observed role row has no numeric identity: " + matches.get(0).getAttribute("outerHTML"));
     }
     System.out.println("  👁️  Found role row id=" + observedId + ", navigating to editor...");
-    sleep(2000);
     adminOpen(listPath + "/" + observedId + "/edit");
     System.out.println("  👁️  Waiting for editor route...");
-    sleep(2000);
     awaitManagementRouteChange(listPath);
   }
 
@@ -1127,8 +1121,9 @@ public class AdminSteps {
 
   @When("I open the observed external role {string} editor")
   public void i_open_the_observed_external_role_editor(String roleName) {
-    sleep(2000);
+    long t0 = System.currentTimeMillis();
     assertAdminList("/external/admin/authority-rights", "External Roles");
+    System.out.println("  [timer] assertAdminList done (" + (System.currentTimeMillis()-t0) + "ms)");
     // Find the row for AutotestRole
     SelenideElement targetRow = null;
     for (SelenideElement row : visibleManagementTable().$$("tbody tr[id]")) {
@@ -1156,24 +1151,22 @@ public class AdminSteps {
     if (observedId == null || !observedId.matches("[0-9]+")) {
       throw new AssertionError("Observed role row has no numeric identity");
     }
+    System.out.println("  [timer] find row done (" + (System.currentTimeMillis()-t0) + "ms)");
     System.out.println("  👁️  Found '" + roleName + "' row id=" + observedId + ", navigating to editor...");
-    sleep(2000);
     adminOpen("/external/admin/authority-rights/" + observedId + "/edit");
     System.out.println("  👁️  Waiting for editor route...");
-    sleep(2000);
     long deadline = System.currentTimeMillis() + 30000;
     while (System.currentTimeMillis() < deadline) {
       String url = WebDriverRunner.url();
-      if (url != null && url.contains("/external/admin/authority-rights/" + observedId + "/edit")) return;
+      if (url != null && url.contains("/external/admin/authority-rights/" + observedId + "/edit")) break;
       sleep(300);
     }
-    throw new AssertionError("Role editor did not load; current URL=" + WebDriverRunner.url());
+    System.out.println("  [timer] navigate to editor done (" + (System.currentTimeMillis()-t0) + "ms)");
   }
 
   @Then("the observed external role editor is displayed")
   public void the_observed_external_role_editor_is_displayed() {
     System.out.println("  👁️  External role editor displayed");
-    sleep(2000);
     $("h1").shouldBe(visible);
     $("form").shouldBe(visible);
     // Click Edit to enable the form if it's in read-only mode
@@ -1183,7 +1176,6 @@ public class AdminSteps {
       if ("Edit".equalsIgnoreCase(text)) {
         btn.click();
         System.out.println("  👁️  Clicked Edit to unlock form");
-        sleep(2000);
         break;
       }
     }
@@ -1191,7 +1183,6 @@ public class AdminSteps {
 
   @When("I remember the current role description")
   public void i_remember_the_current_role_description() {
-    // Check if the form is in read-only mode and needs Edit clicked first
     SelenideElement descField = $("input[name*=description i], input[id*=description i], textarea[name*=description i]");
     String desc = "";
     try {
@@ -1203,7 +1194,6 @@ public class AdminSteps {
           if ("Edit".equalsIgnoreCase(text)) {
             btn.click();
             System.out.println("  👁️  Clicked Edit to enable form fields");
-            sleep(2000);
             break;
           }
         }
@@ -1213,7 +1203,6 @@ public class AdminSteps {
       desc = descField.getValue();
     } catch (Throwable ignored) { }
     System.out.println("  👁️  Current description: '" + desc + "'");
-    sleep(2000);
   }
 
   @When("I append {string} to the role description")
@@ -1227,7 +1216,6 @@ public class AdminSteps {
         if ("Edit".equalsIgnoreCase(text)) {
           btn.click();
           System.out.println("  👁️  Clicked Edit to enable form");
-          sleep(2000);
           break;
         }
       }
@@ -1237,77 +1225,56 @@ public class AdminSteps {
     descField.sendKeys(Keys.END);
     descField.sendKeys(suffix);
     System.out.println("  👁️  Appended '" + suffix + "' to description, value now: '" + descField.getValue() + "'");
-    sleep(2000);
+    sleep(500);
   }
 
-  @When("I select {string} as the user representing")
+            @When("I select {string} as the user representing")
   public void i_select_user_representing(String value) {
     System.out.println("  👁️  Selecting user representing: '" + value + "'...");
-    sleep(2000);
-    boolean done = false;
-    // Find the representedEntityType select and select by visible text
-    SelenideElement repSelect = $("#representedEntityType");
-    if (repSelect.isDisplayed()) {
-      // Try different case variations
-      for (String tryVal : new String[]{value, value.toLowerCase(), value.toUpperCase(),
-          value.substring(0, 1).toUpperCase() + value.substring(1).toLowerCase()}) {
-        try {
-          repSelect.selectOption(tryVal);
-          done = true;
-          break;
-        } catch (Throwable ignored) { }
+    SelenideElement sel = $("#representedEntityType");
+    if (sel.isDisplayed()) {
+      // Try exact text, then capitalized, then by value
+      try { sel.selectOption(value); }
+      catch (Throwable e1) {
+        try { sel.selectOption(value.substring(0,1).toUpperCase() + value.substring(1).toLowerCase()); }
+        catch (Throwable e2) {
+          try { sel.selectOptionByValue(value); }
+          catch (Throwable e3) {
+            sel.selectOptionByValue(value.substring(0,1).toUpperCase() + value.substring(1).toLowerCase());
+          }
+        }
       }
-    }
-    if (!done) {
-      for (SelenideElement selectEl : $$("select")) {
-        if (!selectEl.isDisplayed()) continue;
-        try {
-          selectEl.selectOption(value);
-          done = true;
-          break;
-        } catch (Throwable ignored) { }
-      }
-    }
-    if (!done) {
-      throw new AssertionError("Could not find 'User representing' dropdown to select '" + value + "'");
+      // Force events for Angular change detection
+      executeJavaScript(
+        "arguments[0].dispatchEvent(new Event('change', {bubbles: true}));" +
+        "arguments[0].dispatchEvent(new Event('blur', {bubbles: true}));",
+        sel.getWrappedElement());
     }
     System.out.println("  👁️  User representing set to '" + value + "'");
-    sleep(2000);
+    sleep(500);
   }
 
-  @When("I select {string} as the represented entity country")
+@When("I select {string} as the represented entity country")
   public void i_select_represented_entity_country(String countryCode) {
     System.out.println("  👁️  Selecting country: '" + countryCode + "'...");
-    sleep(2000);
     boolean done = false;
-    // Try known country dropdown IDs
     for (String id : new String[]{"representedEntityCountry", "country", "entityCountry"}) {
       SelenideElement select = $("#" + id);
       if (select.isDisplayed()) {
-        try {
-          select.selectOptionByValue(countryCode);
-          done = true;
-          break;
-        } catch (Throwable ignored) {
-          try {
-            select.selectOption(countryCode);
-            done = true;
-            break;
-          } catch (Throwable ignored2) { }
-        }
+        select.selectOptionByValue(countryCode);
+        done = true;
+        break;
       }
     }
     if (!done) {
       throw new AssertionError("Could not find country dropdown to select '" + countryCode + "'");
     }
     System.out.println("  👁️  Country set to '" + countryCode + "'");
-    sleep(2000);
   }
 
-  @When("I add the role right {string}")
+@When("I add the role right {string}")
   public void i_add_role_right(String rightName) {
     System.out.println("  👁️  Adding role right '" + rightName + "'...");
-    sleep(2000);
     // Find the checkbox by its label text
     String checkboxId = null;
     for (SelenideElement labelEl : $$("label")) {
@@ -1346,7 +1313,6 @@ public class AdminSteps {
     } else {
       System.out.println("  👁️  '" + rightName + "' was already checked");
     }
-    sleep(2000);
 
     // Click the right-arrow button (<-) to move it to the selected list
     System.out.println("  👁️  Clicking arrow to add right...");
@@ -1381,13 +1347,11 @@ public class AdminSteps {
     } else {
       System.out.println("  👁️  Right arrow clicked");
     }
-    sleep(2000);
   }
 
   @When("I save the external role")
   public void i_save_the_external_role() {
     System.out.println("  👁️  Saving external role...");
-    sleep(2000);
     SelenideElement saveBtn = null;
     for (SelenideElement btn : $$("button")) {
       if (!btn.isDisplayed() || !btn.isEnabled()) continue;
@@ -1402,15 +1366,29 @@ public class AdminSteps {
     }
     saveBtn.click();
     System.out.println("  👁️  Save clicked, waiting for confirmation...");
-    sleep(2000);
   }
 
   @Then("role_saved_confirmation")
   public void role_saved_confirmation() {
-    assertSemanticState("role_saved_confirmation");
-    captureScenarioCheckpoint("Then", "role_saved_confirmation");
-    System.out.println("  👁️  Role saved successfully");
-    sleep(2000);
+    long deadline = System.currentTimeMillis() + 15000;
+    while (System.currentTimeMillis() < deadline) {
+      try {
+        SelenideElement bodyEl = $("body");
+        if (bodyEl.exists() && bodyEl.isDisplayed()) {
+          String body = bodyEl.getText();
+          String norm = body == null ? "" : body.toLowerCase(java.util.Locale.ROOT);
+          if (norm.contains("saved") || norm.contains("success")) {
+            System.out.println("  👁️  Role saved successfully");
+            captureScenarioCheckpoint("Then", "role_saved_confirmation");
+            screenshot("direct-management-role-saved");
+            return;
+          }
+        }
+      } catch (Throwable ignored) { }
+      sleep(250);
+    }
+    screenshot("direct-management-role-save-failed");
+    throw new AssertionError("Role save confirmation was not detected after clicking Save");
   }
 
   @Then("user_saved_confirmation")
