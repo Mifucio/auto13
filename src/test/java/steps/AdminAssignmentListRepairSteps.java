@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
+import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
 import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
@@ -22,6 +23,9 @@ import static com.codeborne.selenide.Selenide.sleep;
  * rolled back to the exact original option after the scenario.
  */
 public final class AdminAssignmentListRepairSteps {
+  private static final String COMPANY = "AutotestLtSingleSignee";
+  private static final String FORM = "Bonus Issue";
+
   private int candidateOrdinal = -1;
   private String originalValue = "";
   private String assignedValue = "";
@@ -29,9 +33,10 @@ public final class AdminAssignmentListRepairSteps {
 
   @When("I assign the latest observed Submitted Bonus Issue to an available CSD user")
   public void assignLatestObservedSubmittedBonus() {
-    List<SelenideElement> rows = candidateRows();
+    List<SelenideElement> rows = awaitCandidateRows();
     if (rows.isEmpty()) {
-      throw new AssertionError("CA-33 found no visible Submitted Bonus Issue row for AutotestLtSingleSignee");
+      throw new AssertionError("CA-33 found no visible Submitted Bonus Issue row for " + COMPANY
+        + "; visible_rows=" + visibleRowInventory());
     }
 
     candidateOrdinal = 0;
@@ -73,7 +78,7 @@ public final class AdminAssignmentListRepairSteps {
   public void restoreAssignment(Scenario scenario) {
     if (candidateOrdinal < 0 || originalValue == null) return;
     try {
-      List<SelenideElement> rows = candidateRows();
+      List<SelenideElement> rows = awaitCandidateRows();
       if (rows.size() <= candidateOrdinal) {
         scenario.log("CA-33 rollback could not refind the original Submitted Bonus Issue row");
         return;
@@ -114,6 +119,71 @@ public final class AdminAssignmentListRepairSteps {
     }
   }
 
+  private static List<SelenideElement> awaitCandidateRows() {
+    // The stopped live run captured the spinner here: navigation had completed,
+    // but candidateRows() was evaluated before the async table rendered. First
+    // wait for either the desired row or any loaded table row.
+    long initialDeadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    while (System.currentTimeMillis() < initialDeadline) {
+      List<SelenideElement> candidates = candidateRows();
+      if (!candidates.isEmpty()) return candidates;
+      if (hasVisibleApplicationRows()) break;
+      sleep(150);
+    }
+
+    // The Corporate Actions list is paginated. If the desired Submitted Bonus
+    // Issue is not on the first page, narrow the live list with its observed
+    // issuer search and Form name filter instead of assuming page 1 contains it.
+    applyCandidateFilters();
+
+    long filteredDeadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    while (System.currentTimeMillis() < filteredDeadline) {
+      List<SelenideElement> candidates = candidateRows();
+      if (!candidates.isEmpty()) return candidates;
+      sleep(150);
+    }
+    return List.of();
+  }
+
+  private static void applyCandidateFilters() {
+    SelenideElement search = $("input[type=search][name=search]");
+    if (search.exists() && search.isDisplayed() && search.isEnabled()) {
+      search.setValue(COMPANY);
+    }
+
+    SelenideElement formNames = $("#formNames");
+    if (formNames.exists() && formNames.isDisplayed() && formNames.isEnabled()) {
+      formNames.click();
+      long optionDeadline = System.currentTimeMillis() + 5000;
+      while (System.currentTimeMillis() < optionDeadline) {
+        SelenideElement checkbox = checkboxForVisibleLabel(FORM);
+        if (checkbox != null) {
+          if (!checkbox.isSelected()) checkbox.click();
+          break;
+        }
+        sleep(100);
+      }
+    }
+
+    List<SelenideElement> apply = exactVisibleControls("Apply filters");
+    if (apply.size() == 1) {
+      apply.get(0).click();
+      // A filter submit replaces the table with a spinner. The caller polls the
+      // filtered rows, so no arbitrary fixed sleep is required here.
+    }
+  }
+
+  private static SelenideElement checkboxForVisibleLabel(String expected) {
+    for (SelenideElement label : $$("label.form-check-label")) {
+      if (!label.isDisplayed() || !expected.equalsIgnoreCase(clean(label.getText()))) continue;
+      String forId = safe(label.getAttribute("for"));
+      if (forId.isBlank()) continue;
+      SelenideElement checkbox = $("#" + forId);
+      if (checkbox.exists() && checkbox.isEnabled()) return checkbox;
+    }
+    return null;
+  }
+
   private void awaitAssignedValue(String expected) {
     long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 10000);
     String last = "";
@@ -134,9 +204,38 @@ public final class AdminAssignmentListRepairSteps {
     for (SelenideElement row : $$("tbody tr")) {
       if (!row.isDisplayed()) continue;
       String text = clean(row.getText()).toLowerCase(Locale.ROOT);
-      if (!text.contains("bonus issue") || !text.contains("autotestltsinglesignee") || !text.contains("submitted")) continue;
+      if (!text.contains(FORM.toLowerCase(Locale.ROOT))
+          || !text.contains(COMPANY.toLowerCase(Locale.ROOT))
+          || !text.contains("submitted")) continue;
       SelenideElement select = row.$("select#field_assigned_to, select.user");
       if (select.exists() && select.isDisplayed() && select.isEnabled()) result.add(row);
+    }
+    return result;
+  }
+
+  private static boolean hasVisibleApplicationRows() {
+    for (SelenideElement row : $$("tbody tr")) if (row.isDisplayed()) return true;
+    return false;
+  }
+
+  private static String visibleRowInventory() {
+    List<String> rows = new ArrayList<>();
+    for (SelenideElement row : $$("tbody tr")) {
+      if (!row.isDisplayed()) continue;
+      rows.add(clean(row.getText()));
+      if (rows.size() >= 10) break;
+    }
+    return rows.toString();
+  }
+
+  private static List<SelenideElement> exactVisibleControls(String expected) {
+    List<SelenideElement> result = new ArrayList<>();
+    for (SelenideElement control : $$("button,a,[role=button],input[type=button],input[type=submit]")) {
+      if (!control.isDisplayed() || !control.isEnabled()) continue;
+      String label = clean(control.getText());
+      if (label.isBlank()) label = clean(control.getAttribute("value"));
+      if (label.isBlank()) label = clean(control.getAttribute("aria-label"));
+      if (expected.equalsIgnoreCase(label)) result.add(control);
     }
     return result;
   }
