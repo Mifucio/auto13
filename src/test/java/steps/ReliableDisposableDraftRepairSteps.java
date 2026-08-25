@@ -60,7 +60,12 @@ public final class ReliableDisposableDraftRepairSteps {
       // can otherwise cost 70s even though the detail page is already visible.
       Configuration.timeout = Math.min(previousTimeout, 12000);
       flow.fillDisposableApplicationAndSaveDraft(type);
-      return;
+      if (savedDetailVisible()) return;
+      // Some generated fillers return after clicking Save as Draft even when
+      // Angular rejected or did not complete the transition. Treat the still-
+      // editable /new form as a recoverable save failure instead of allowing a
+      // later Sign Document assertion to hide the real transition problem.
+      failure = new AssertionError("Save as Draft returned without opening the application detail; url=" + url());
     } catch (Throwable error) {
       failure = error;
       if (savedDetailVisible()) {
@@ -89,7 +94,8 @@ public final class ReliableDisposableDraftRepairSteps {
   private static boolean savedDetailVisible() {
     try {
       String current = url();
-      if (current != null && current.matches(".*/corporate-actions/application-form/\\d+(?:[/?#].*)?")) return true;
+      if (current != null && !current.contains("/country/") && !current.matches(".*/new(?:[?#].*)?$")
+          && current.matches(".*/corporate-actions/application-form/\\d+(?:[/?#].*)?")) return true;
       String body = $("body").getText();
       return body != null && body.contains("Sign Document");
     } catch (Throwable ignored) { return false; }

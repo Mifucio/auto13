@@ -40,7 +40,9 @@ public final class AdditionalBondsBothBranchRepairSteps {
       // Never let one stale/click-intercepted generated helper consume 70 sec.
       Configuration.timeout = Math.min(previousTimeout, 12000);
       flow.fillDisposableApplicationAndSaveDraft(TYPE);
-      return;
+      if (savedDetailVisible()) return;
+      initialFailure = new AssertionError("AIB Save as Draft returned without opening the application detail; url=" + url());
+      System.out.println("AIB_BOTH_REPAIR root=IncompleteSaveTransition");
     } catch (Throwable failure) {
       initialFailure = failure;
       if (!isRepairableAibFailure(failure)) rethrow(failure);
@@ -91,7 +93,22 @@ public final class AdditionalBondsBothBranchRepairSteps {
       throw new AssertionError("AIB Both branch did not expose #aib_additional_nominal_value");
     }
     setAndDispatch(field, "2000");
-    System.out.println("AIB_ADDITIONAL_NOMINAL_VALUE 2000");
+    double observed = numericDouble(safe(field.getValue()));
+    if (observed < 2000.0) {
+      throw new AssertionError("AIB additional nominal value did not retain minimum 2000; observed=" + field.getValue());
+    }
+    long deadline = System.currentTimeMillis() + 3000;
+    while (System.currentTimeMillis() < deadline) {
+      String body = safe($("body").getText());
+      if (!body.contains("This field should be at least 2000")) break;
+      field.click();
+      field.pressTab();
+      sleep(100);
+    }
+    if (safe($("body").getText()).contains("This field should be at least 2000")) {
+      throw new AssertionError("AIB Angular validation still rejects additional nominal value " + field.getValue());
+    }
+    System.out.println("AIB_ADDITIONAL_NOMINAL_VALUE " + field.getValue());
   }
 
   private static void resolveObservedBondholderRow() {
@@ -135,10 +152,14 @@ public final class AdditionalBondsBothBranchRepairSteps {
     Select accountSelect = new Select(account.getWrappedElement());
 
     boolean needDistribution = unpaid > 0.0001;
-    int accountIndex = needDistribution ? optionIndexContaining(accountSelect, "distribution account")
-      : firstNonEmptyOptionIndex(accountSelect);
+    int distributionIndex = needDistribution ? optionIndexContaining(accountSelect, "distribution account") : -1;
+    // The live bond fixture can be fully unpaid while exposing only Participant
+    // Own/Nominee accounts. Do not invent a Distribution Account requirement
+    // that the form itself does not impose; use it when present, otherwise keep
+    // the first observed selectable account and submit the unpaid nominal.
+    int accountIndex = distributionIndex >= 0 ? distributionIndex : firstNonEmptyOptionIndex(accountSelect);
     if (accountIndex < 0) {
-      throw new AssertionError("AIB requires " + (needDistribution ? "Distribution Account" : "an account")
+      throw new AssertionError("AIB requires an account"
         + " for paid=" + paid + " unpaid=" + unpaid + "; options=" + optionInventory(accountSelect));
     }
     accountSelect.selectByIndex(accountIndex);
@@ -146,7 +167,7 @@ public final class AdditionalBondsBothBranchRepairSteps {
     selectFirstNonEmpty(name);
 
     String accountLabel = safe(accountSelect.getFirstSelectedOption().getText());
-    double required = needDistribution ? unpaid : paid;
+    double required = unpaid > 0.0001 ? unpaid : paid;
     if (required <= 0.0001 && !needDistribution) {
       // A fully-unpaid source instrument with no Distribution Account is not a
       // valid deterministic fixture for this UI scenario. Fail now, not after
@@ -175,7 +196,7 @@ public final class AdditionalBondsBothBranchRepairSteps {
       System.out.println("AIB_SAVE_RETRY attempt=" + attempt + " url=" + url());
     }
     throw new AssertionError("AIB Save as Draft did not reach an application detail within 20s; url=" + url()
-      + "; validation=" + visibleValidationMessages(), initialFailure);
+      + "; validation=" + visibleValidationMessages() + "; state=" + repairState(), initialFailure);
   }
 
   private static void clickStickySaveDraft() {
@@ -192,7 +213,8 @@ public final class AdditionalBondsBothBranchRepairSteps {
   private static boolean savedDetailVisible() {
     try {
       String current = url();
-      if (current != null && current.matches(".*/corporate-actions/application-form/\\d+(?:[/?#].*)?")) return true;
+      if (current != null && !current.contains("/country/") && !current.matches(".*/new(?:[?#].*)?$")
+          && current.matches(".*/corporate-actions/application-form/\\d+(?:[/?#].*)?")) return true;
       String body = $("body").getText();
       return body != null && body.contains("Sign Document") && body.contains(TYPE);
     } catch (Throwable ignored) { return false; }
@@ -204,6 +226,15 @@ public final class AdditionalBondsBothBranchRepairSteps {
         + "return [...document.querySelectorAll(sel)].filter(e=>e.offsetParent!==null)"
         + ".map(e=>String(e.innerText||'').replace(/\\s+/g,' ').trim()).filter(Boolean).join(' | ');");
     return value == null ? "" : safe(value.toString()).trim();
+  }
+
+  private static String repairState() {
+    Object value = executeJavaScript(
+      "const ids=['aib_additional_nominal_value','aib_nominal_value_paid','aib_nominal_value_unpaid',"
+        + "'aib_bht_code_0','aib_bht_account_0','aib_bht_name_0','aib_bht_amount_of_bonds_issued_0'];"
+        + "return ids.map(id=>{const e=document.getElementById(id);return id+'='+(e?e.value:'<missing>')"
+        + "+(e&&e.matches(':invalid')?'[invalid]':'');}).join(',');");
+    return value == null ? "" : value.toString();
   }
 
   private static boolean hasSelectableOption(SelenideElement field) {

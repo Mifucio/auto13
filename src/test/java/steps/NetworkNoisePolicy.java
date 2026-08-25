@@ -16,6 +16,8 @@ final class NetworkNoisePolicy {
     "/services/corporate-actions/api/internal-user-announcements";
   private static final String ADMIN_USERS_PATH =
     "/services/admin/sales-and-services-users";
+  private static final Pattern DOKOBIT_AUTH_NAVIGATION =
+    Pattern.compile("https://id-sandbox\\.dokobit\\.com/auth/[^?]+(?:\\?.*)?");
   private static final Pattern STATIC_I18N = Pattern.compile(".*/i18n/[^/?]+\\.json(?:\\?.*)?$");
 
   private NetworkNoisePolicy() { }
@@ -30,6 +32,7 @@ final class NetworkNoisePolicy {
           || url.contains(DISCLOSURE_POLL_PATH)
           || url.contains(ADMIN_ANNOUNCEMENTS_PATH)
           || url.contains(ADMIN_USERS_PATH)
+          || DOKOBIT_AUTH_NAVIGATION.matcher(url).matches()
           || STATIC_I18N.matcher(url).matches()) {
         iterator.remove();
         removed = true;

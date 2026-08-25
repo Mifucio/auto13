@@ -28,7 +28,9 @@ public final class Ca22AttachmentRepairSteps {
     executeJavaScript(
       "window.__ca22Staged=null; arguments[0].addEventListener('change',function handler(e){"
         + "const f=e.target.files; window.__ca22Staged={count:f?f.length:0,name:(f&&f.length)?f[0].name:''};"
-        + "},{once:true});", input.getWrappedElement());
+        // Capture before Angular's bubbling change handler can replace or clear
+        // the native input after copying the file into component state.
+        + "},{once:true,capture:true});", input.getWrappedElement());
     input.uploadFile(stagedFixture.toFile());
   }
 
@@ -57,9 +59,22 @@ public final class Ca22AttachmentRepairSteps {
       "const c=[...document.querySelectorAll('button,a,[role=button],input[type=button]')]"
         + ".filter(e=>e.offsetParent!==null&&!e.disabled)"
         + ".filter(e=>String(e.innerText||e.value||e.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().toLowerCase()==='discard');"
-        + "if(c.length===1)c[0].click(); return c.length;");
-    if (count == null || count.intValue() != 1) {
-      throw new AssertionError("CA-22 expected exactly one observed Discard control, found " + (count == null ? 0 : count.intValue()));
+        + "const preferred=c.filter(e=>e.closest('#editingNavbar'));"
+        + "const target=(preferred.length?preferred:c).at(-1); if(target)target.click(); return c.length;");
+    if (count == null || count.intValue() < 1) {
+      throw new AssertionError("CA-22 expected an observed Discard control, found 0");
+    }
+    long confirmationDeadline = System.currentTimeMillis() + 5000;
+    while (System.currentTimeMillis() < confirmationDeadline) {
+      Number confirmed = executeJavaScript(
+        "const text=String(document.body&&document.body.innerText||'');"
+          + "if(!text.includes('Are you sure you want to discard changes?'))return 0;"
+          + "const c=[...document.querySelectorAll('button,a,[role=button],input[type=button]')]"
+          + ".filter(e=>e.offsetParent!==null&&!e.disabled)"
+          + ".filter(e=>String(e.innerText||e.value||'').replace(/\\s+/g,' ').trim().toLowerCase()==='discard');"
+          + "if(c.length)c.at(-1).click(); return c.length;");
+      if (confirmed != null && confirmed.intValue() > 0) break;
+      sleep(100);
     }
     long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 10000);
     while (System.currentTimeMillis() < deadline) {
