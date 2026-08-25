@@ -1,5 +1,5 @@
 @req:CA-39
-@direct_ca_disposable_draft
+@cross_surface_disposable_admin
 Feature: "Attach a file in Attachments tab"
 
   @req:CA-39

@@ -1,5 +1,6 @@
 package steps;
 
+import com.codeborne.selenide.Configuration;
 import com.codeborne.selenide.SelenideElement;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
@@ -16,30 +17,34 @@ import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
 /**
- * Makes disposable Corporate Actions scenarios independent from the execution
- * order of other Cucumber scenarios. The wrapper also verifies the represented
- * company after session reuse, because presence of the navbar alone does not
- * prove that the requested company is active.
+ * Makes disposable Corporate Actions scenarios independent from execution
+ * order. The wrapper waits for async form/Dokobit controls, verifies represented
+ * company identity, and routes create/save through the live-runtime repair
+ * helper without changing the observable customer workflow.
  */
 public final class DisposableScenarioPrerequisites {
   private static final String DEFAULT_COMPANY = "AutotestLtSingleSignee";
 
   private final DisposableDividendSteps flow;
+  private final DisposableExecutionRepairSteps repair;
 
-  public DisposableScenarioPrerequisites(DisposableDividendSteps flow) {
+  public DisposableScenarioPrerequisites(DisposableDividendSteps flow,
+                                         DisposableExecutionRepairSteps repair) {
     this.flow = flow;
+    this.repair = repair;
   }
 
   @Given("a fresh saved disposable {string} application exists")
   public void freshSavedDisposableApplication(String type) throws Exception {
-    flow.login();
+    loginWithDokobitReadinessRetry();
     selectAndVerifyCompany(DEFAULT_COMPANY);
     CustomerRepairSteps.ensureCustomerEnglish();
     flow.openCorporateActions();
-    flow.clickCreateApplication();
+    repair.openCreateApplicationSafely();
     flow.chooseLastApplicationType(type);
     flow.formVisible();
-    flow.fillDisposableApplicationAndSaveDraft(type);
+    awaitSourceInstrumentControl(type);
+    repair.fillAndSafelySaveDraft(type);
     flow.signDocumentVisibleStep();
     flow.persistContract();
   }

@@ -1,5 +1,5 @@
 @req:CA-40
-@direct_ca_disposable_draft
+@submitted_disposable_admin
 Feature: "Reject Application, add comments, check if status changes to Invalid"
 
   @req:CA-40

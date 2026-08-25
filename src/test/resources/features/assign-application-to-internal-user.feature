@@ -1,5 +1,5 @@
 @req:CA-33
-@direct_ca_disposable_draft
+@ca33_assignment_repair
 Feature: "Assign Application to internal user"
 
   @req:CA-33
