@@ -9,7 +9,7 @@ Feature: Create, sign and review the disposable Additional issuance of Bonds app
     And I click Create Application
     And I choose the last "Additional issuance of Bonds" application type
     Then the Application data form must be visible
-    When I fill and safely save the disposable "Additional issuance of Bonds" form as draft
+    When I fill and safely save the disposable Additional issuance of Bonds form on the Both paid-up branch
     Then the Sign Document button must be visible
     And I persist the disposable application ID and remembered source instrument
 
