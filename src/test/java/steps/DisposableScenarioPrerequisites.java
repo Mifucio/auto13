@@ -51,65 +51,16 @@ public final class DisposableScenarioPrerequisites {
 
   @And("I select and verify company {string} for the disposable application")
   public void selectAndVerifyCompany(String company) {
-    AssertionError last = null;
-    for (int attempt = 1; attempt <= 2; attempt++) {
-      try {
-        String current = url();
-        if (current != null && current.contains("/company-selection")) {
-          CustomerRepairSteps.selectRepresentedCompanyCardOnSelectionPage(company);
-        } else {
-          flow.selectCompany(company);
-        }
-        assertOrRepairCompanyContext(company);
-        return;
-      } catch (AssertionError failure) {
-        last = failure;
-        String current = url();
-        // Cached customer auth was observed expiring exactly on a company-card
-        // click, bouncing to /login. Re-authenticate once and retry the same
-        // company rather than treating stale session state as a business fail.
-        if (attempt == 1 && current != null && current.contains("/login")) {
-          loginWithDokobitReadinessRetry();
-          continue;
-        }
-        throw failure;
-      }
+    String current = url();
+    if (current != null && current.contains("/company-selection")) {
+      // The company-selection heading is localized in the Mobile-ID account
+      // (EE in the captured run), so select by the observed card itself rather
+      // than requiring the English "Choose who you represent" landmark.
+      CustomerRepairSteps.selectRepresentedCompanyCardOnSelectionPage(company);
+    } else {
+      flow.selectCompany(company);
     }
-    throw last == null ? new AssertionError("Company selection failed without an observable cause") : last;
-  }
-
-  private void loginWithDokobitReadinessRetry() {
-    AssertionError last = null;
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      try {
-        flow.login();
-        return;
-      } catch (AssertionError error) {
-        last = error;
-        String message = error.getMessage() == null ? "" : error.getMessage();
-        if (!message.contains("Dokobit country option") || attempt == 3) throw error;
-        System.out.println("DISPOSABLE_DOKOBIT_READINESS_RETRY attempt=" + attempt);
-        sleep(1200);
-      }
-    }
-    if (last != null) throw last;
-  }
-
-  private static void awaitSourceInstrumentControl(String type) {
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
-    while (System.currentTimeMillis() < deadline) {
-      for (SelenideElement field : $$("select[id*='security_name'], select[name*='security_name'], [role=combobox][id*='security_name']")) {
-        if (field.exists() && field.isDisplayed() && field.isEnabled()) return;
-      }
-      sleep(100);
-    }
-    List<String> observed = new ArrayList<>();
-    for (SelenideElement field : $$("select, [role=combobox]")) {
-      if (!field.exists()) continue;
-      observed.add(field.getTagName() + "#" + String.valueOf(field.getAttribute("id"))
-        + " visible=" + field.isDisplayed() + " enabled=" + field.isEnabled());
-    }
-    throw new AssertionError("Disposable " + type + " form did not finish rendering its source instrument control; observed=" + observed);
+    assertOrRepairCompanyContext(company);
   }
 
   private static void assertOrRepairCompanyContext(String company) {

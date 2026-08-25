@@ -4,7 +4,6 @@ Feature: "Assign Application to internal user"
 
   @req:CA-33
   Scenario: [admin] "Assign Application to internal user"
-    Given I am authenticated in the admin application
-    And I navigate to the admin "/corporate-actions"
-    When I assign the latest observed Submitted Bonus Issue to an available CSD user
-    Then the latest observed Submitted Bonus Issue retains the assigned CSD user
+    Given a fresh authenticated disposable admin Corporate Actions draft exists
+    When I assign the disposable application to an available internal user
+    Then the disposable assignment is saved

@@ -75,7 +75,11 @@ public class StepDefinitions {
 
   @AfterStep
   public void afterStep(Scenario scenario) {
-    NetworkBusinessWaitRepair.waitForBusinessData();
+    // The translation bootstrap endpoint is UI background work, not business
+    // data. The live run proved it can remain pending >15s while the page is
+    // already usable, so it must not trigger the business-data hang gate.
+    NetworkNoisePolicy.discardNonBlockingBackgroundRequests();
+    waitForExternalData();
     long durationMs = System.currentTimeMillis() - stepStartedAt;
     boolean slow = durationMs > SLOW_STEP_MS;
     PERFORMANCE_RESULTS.add("{\"type\":\"step\",\"name\":\"" + jsonEscape(currentStep) + "\",\"durationMs\":" + durationMs + ",\"slow\":" + slow + "}");
@@ -109,8 +113,13 @@ public class StepDefinitions {
       }
       try {
         List<String> driverLogs = getDriverConsoleLogs();
-        if (!driverLogs.isEmpty()) Allure.addAttachment("Browser Console (WebDriver)", "text/plain", String.join("\n", driverLogs));
-      } catch (Exception ignored) { }
+        if (!driverLogs.isEmpty()) {
+          String driverLog = String.join("\n", driverLogs);
+          Allure.addAttachment("Browser Console (WebDriver)", "text/plain", driverLog);
+        }
+      } catch (Exception e) {
+        // Browser may not support or already closed
+      }
     }
   }
 
@@ -128,4 +137,11 @@ public class StepDefinitions {
     writePerformanceReport();
     System.out.println("✅ Suite completed");
   }
+
+  // ── Locator Constants ─────────────────────────────────────────
+  // No locators generated — tests use generic actions
+
+  // ── Shared/common Step Definitions ─────────────────────────────
+
+
 }
