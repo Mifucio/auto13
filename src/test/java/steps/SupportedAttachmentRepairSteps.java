@@ -24,6 +24,7 @@ public final class SupportedAttachmentRepairSteps {
   private static final String FIXTURE = "/fixtures/ca22-disposable-attachment.pdf";
   private static final Path DOWNLOADS = Path.of("build", "supported-attachment-downloads").toAbsolutePath().normalize();
   private String attachmentName = "";
+  private String acceptedTypes = "";
   private Path downloaded;
 
   @When("I attach the supported PDF fixture in the current application Attachments tab")
@@ -31,27 +32,34 @@ public final class SupportedAttachmentRepairSteps {
     openTab("Attachments");
     Path fixture = fixturePath();
     attachmentName = fixture.getFileName().toString();
+
+    // uploadFile causes the Angular attachment widget to rerender immediately.
+    // Capture anything needed from the old element BEFORE upload and never
+    // touch that WebElement again afterwards.
     SelenideElement input = awaitFileInput();
+    acceptedTypes = clean(input.getAttribute("accept"));
     input.uploadFile(fixture.toFile());
 
-    if (!waitForAttachmentName(3000)) {
-      for (String label : List.of("Upload", "Add attachment", "Save attachment", "Attach")) {
-        List<SelenideElement> controls = exactVisibleControls(label);
-        if (controls.size() == 1) {
-          controls.get(0).click();
-          break;
-        }
+    if (waitForAttachmentName(5000)) return;
+
+    // Some variants stage the file and require one explicit commit action.
+    for (String label : List.of("Upload", "Add attachment", "Save attachment", "Attach", "Seal")) {
+      List<SelenideElement> controls = exactVisibleControls(label);
+      if (controls.size() == 1) {
+        controls.get(0).click();
+        break;
       }
     }
-    if (!waitForAttachmentName(15000)) {
+
+    if (!waitForAttachmentName(8000)) {
       throw new AssertionError("Supported PDF fixture was not visible after upload: " + attachmentName
-        + "; accept=" + input.getAttribute("accept"));
+        + "; accept=" + acceptedTypes + "; body=" + bodyExcerpt());
     }
   }
 
   @Then("the supported PDF fixture is visible in the current application")
   public void supportedPdfVisible() {
-    if (attachmentName.isBlank() || !waitForAttachmentName(10000)) {
+    if (attachmentName.isBlank() || !waitForAttachmentName(5000)) {
       throw new AssertionError("Supported PDF fixture is not visible in Attachments: " + attachmentName);
     }
   }
@@ -59,7 +67,7 @@ public final class SupportedAttachmentRepairSteps {
   @When("I download the supported PDF fixture from the current application")
   public void downloadSupportedPdf() {
     openTab("Attachments");
-    if (!waitForAttachmentName(10000)) throw new AssertionError("Cannot download absent attachment " + attachmentName);
+    if (!waitForAttachmentName(5000)) throw new AssertionError("Cannot download absent attachment " + attachmentName);
     SelenideElement control = attachmentDownloadControl();
     clearDirectory(DOWNLOADS);
     downloaded = null;
@@ -70,14 +78,18 @@ public final class SupportedAttachmentRepairSteps {
       Configuration.downloadsFolder = DOWNLOADS.toString();
       Configuration.fileDownload = FileDownloadMode.FOLDER;
       java.io.File returned = null;
-      try { returned = control.download(); } catch (Throwable failure) {
-        try { control.click(); } catch (Throwable ignored) { }
+      try { returned = control.download(); }
+      catch (Throwable failure) {
+        // Rerendering can stale the first control. Re-resolve once by filename.
+        SelenideElement fresh = attachmentDownloadControl();
+        try { returned = fresh.download(); }
+        catch (Throwable ignored) { try { fresh.click(); } catch (Throwable ignoredAgain) { } }
       }
       if (returned != null && returned.isFile() && returned.length() > 0) {
         downloaded = returned.toPath().toAbsolutePath().normalize();
         return;
       }
-      long deadline = System.currentTimeMillis() + 20000;
+      long deadline = System.currentTimeMillis() + 10000;
       while (System.currentTimeMillis() < deadline) {
         Path file = firstNonEmptyFile(DOWNLOADS);
         if (file != null) { downloaded = file; return; }
@@ -103,7 +115,7 @@ public final class SupportedAttachmentRepairSteps {
     if (clickable == null) throw new AssertionError("No observed " + name + " tab control was found");
     CorporateActionsTabProbe.prepare(name);
     $(clickable).scrollIntoView("{block:'center',inline:'center'}").click();
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 15000);
+    long deadline = System.currentTimeMillis() + 8000;
     while (System.currentTimeMillis() < deadline) {
       if (CorporateActionsTabProbe.isActive(name)) return;
       sleep(100);
@@ -112,10 +124,11 @@ public final class SupportedAttachmentRepairSteps {
   }
 
   private static SelenideElement awaitFileInput() {
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 15000);
+    long deadline = System.currentTimeMillis() + 8000;
     while (System.currentTimeMillis() < deadline) {
       for (SelenideElement input : $$("input[type=file]")) {
-        if (input.exists() && input.isEnabled()) return input;
+        try { if (input.exists() && input.isEnabled()) return input; }
+        catch (Throwable ignored) { }
       }
       sleep(100);
     }
@@ -123,10 +136,13 @@ public final class SupportedAttachmentRepairSteps {
   }
 
   private boolean waitForAttachmentName(long timeoutMs) {
+    String expected = canonicalFileToken(attachmentName);
     long deadline = System.currentTimeMillis() + timeoutMs;
     while (System.currentTimeMillis() < deadline) {
-      try { if (!attachmentName.isBlank() && $("body").getText().contains(attachmentName)) return true; }
-      catch (Throwable ignored) { }
+      try {
+        String body = canonicalFileToken($("body").getText());
+        if (!expected.isBlank() && body.contains(expected)) return true;
+      } catch (Throwable ignored) { }
       sleep(100);
     }
     return false;
@@ -134,18 +150,25 @@ public final class SupportedAttachmentRepairSteps {
 
   private SelenideElement attachmentDownloadControl() {
     List<SelenideElement> containers = new ArrayList<>();
+    String expected = canonicalFileToken(attachmentName);
     for (SelenideElement candidate : $$("tr,li,.card,.row,div")) {
-      if (!candidate.isDisplayed()) continue;
-      if (clean(candidate.getText()).contains(attachmentName)) containers.add(candidate);
+      try {
+        if (!candidate.isDisplayed()) continue;
+        if (canonicalFileToken(candidate.getText()).contains(expected)) containers.add(candidate);
+      } catch (Throwable ignored) { }
     }
-    containers.sort(Comparator.comparingInt(candidate -> clean(candidate.getText()).length()));
+    containers.sort(Comparator.comparingInt(candidate -> {
+      try { return clean(candidate.getText()).length(); } catch (Throwable ignored) { return Integer.MAX_VALUE; }
+    }));
     for (SelenideElement container : containers) {
-      for (SelenideElement control : container.$$("a,button,[role=button]")) {
-        if (!control.isDisplayed() || !control.isEnabled()) continue;
-        String clue = clean(control.getText() + " " + control.getAttribute("aria-label") + " " + control.getAttribute("title")).toLowerCase(Locale.ROOT);
-        String href = clean(control.getAttribute("href"));
-        if (clue.contains("download") || (!href.isBlank() && "a".equalsIgnoreCase(control.getTagName()))) return control;
-      }
+      try {
+        for (SelenideElement control : container.$$("a,button,[role=button]")) {
+          if (!control.isDisplayed() || !control.isEnabled()) continue;
+          String clue = clean(control.getText() + " " + control.getAttribute("aria-label") + " " + control.getAttribute("title")).toLowerCase(Locale.ROOT);
+          String href = clean(control.getAttribute("href"));
+          if (clue.contains("download") || (!href.isBlank() && "a".equalsIgnoreCase(control.getTagName()))) return control;
+        }
+      } catch (Throwable ignored) { }
     }
     throw new AssertionError("Attachment is visible but no row-scoped download control was found: " + attachmentName);
   }
@@ -178,13 +201,26 @@ public final class SupportedAttachmentRepairSteps {
   private static List<SelenideElement> exactVisibleControls(String expected) {
     List<SelenideElement> result = new ArrayList<>();
     for (SelenideElement control : $$("button,a,[role=button],input[type=button],input[type=submit]")) {
-      if (!control.isDisplayed() || !control.isEnabled()) continue;
-      String label = clean(control.getText());
-      if (label.isBlank()) label = clean(control.getAttribute("value"));
-      if (label.isBlank()) label = clean(control.getAttribute("aria-label"));
-      if (expected.equalsIgnoreCase(label)) result.add(control);
+      try {
+        if (!control.isDisplayed() || !control.isEnabled()) continue;
+        String label = clean(control.getText());
+        if (label.isBlank()) label = clean(control.getAttribute("value"));
+        if (label.isBlank()) label = clean(control.getAttribute("aria-label"));
+        if (expected.equalsIgnoreCase(label)) result.add(control);
+      } catch (Throwable ignored) { }
     }
     return result;
+  }
+
+  private static String canonicalFileToken(String value) {
+    return clean(value).toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "");
+  }
+
+  private static String bodyExcerpt() {
+    try {
+      String body = clean($("body").getText());
+      return body.length() <= 800 ? body : body.substring(0, 800) + "...";
+    } catch (Throwable ignored) { return ""; }
   }
 
   private static String clean(String value) {
