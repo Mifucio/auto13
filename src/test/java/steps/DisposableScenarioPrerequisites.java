@@ -13,6 +13,7 @@ import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
 import static com.codeborne.selenide.Selenide.sleep;
+import static com.codeborne.selenide.WebDriverRunner.url;
 
 /**
  * Makes disposable Corporate Actions scenarios independent from the execution
@@ -45,7 +46,15 @@ public final class DisposableScenarioPrerequisites {
 
   @And("I select and verify company {string} for the disposable application")
   public void selectAndVerifyCompany(String company) {
-    flow.selectCompany(company);
+    String current = url();
+    if (current != null && current.contains("/company-selection")) {
+      // The company-selection heading is localized in the Mobile-ID account
+      // (EE in the captured run), so select by the observed card itself rather
+      // than requiring the English "Choose who you represent" landmark.
+      CustomerRepairSteps.selectRepresentedCompanyCardOnSelectionPage(company);
+    } else {
+      flow.selectCompany(company);
+    }
     assertOrRepairCompanyContext(company);
   }
 

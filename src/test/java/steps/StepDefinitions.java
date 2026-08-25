@@ -92,6 +92,10 @@ public class StepDefinitions {
 
   @AfterStep
   public void afterStep(Scenario scenario) {
+    // The translation bootstrap endpoint is UI background work, not business
+    // data. The live run proved it can remain pending >15s while the page is
+    // already usable, so it must not trigger the business-data hang gate.
+    NetworkNoisePolicy.discardNonBlockingBackgroundRequests();
     waitForExternalData();
     long durationMs = System.currentTimeMillis() - stepStartedAt;
     boolean slow = durationMs > SLOW_STEP_MS;
@@ -139,7 +143,7 @@ public class StepDefinitions {
       try {
         List<String> driverLogs = getDriverConsoleLogs();
         if (!driverLogs.isEmpty()) {
-          String driverLog = String.join("\\n", driverLogs);
+          String driverLog = String.join("\n", driverLogs);
           Allure.addAttachment("Browser Console (WebDriver)", "text/plain", driverLog);
         }
       } catch (Exception e) {
