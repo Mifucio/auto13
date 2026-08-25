@@ -13,6 +13,6 @@ Feature: Add attachment to a new Corporate Actions application
     And I click Create Application
     And I choose the last "Bonus Issue" application type
     Then the Application data form must be visible
-    When I stage the harmless CA-22 fixture before the first save
-    Then the unsaved CA-22 draft contains exactly one staged disposable attachment
-    And I abandon the disposable CA-22 draft without saving
+    When I stage the harmless CA-22 fixture in the observed Other document input
+    Then the CA-22 Other document input contains exactly one staged disposable attachment
+    And I discard the unsaved CA-22 draft without saving
