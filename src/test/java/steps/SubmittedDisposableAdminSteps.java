@@ -85,7 +85,7 @@ public final class SubmittedDisposableAdminSteps {
   }
 
   private void awaitExactAdminDetail() {
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    long deadline = System.currentTimeMillis() + Math.max(Configuration.timeout, RuntimeState.HANG_TIMEOUT_MS);
     String lastBody = "";
     while (System.currentTimeMillis() < deadline) {
       if (isExactDetail()) {

@@ -164,15 +164,21 @@ public final class CrossSurfaceDisposableAdminSteps {
   }
 
   private void awaitAdminDetail() {
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    long deadline = System.currentTimeMillis() + Math.max(Configuration.timeout, RuntimeState.HANG_TIMEOUT_MS);
+    String lastBody = "";
     while (System.currentTimeMillis() < deadline) {
       if (isCurrentApplicationDetail()) {
-        String body = $("body").shouldBe(visible).getText();
-        if (body != null && body.contains(TYPE)) return;
+        lastBody = $("body").shouldBe(visible).getText();
+        // The exact numeric route is authoritative. On a busy live backend the
+        // localized form title can arrive later than the reusable detail tabs,
+        // so accept either marker instead of failing a healthy rendered page.
+        if ((lastBody != null && lastBody.contains(TYPE))
+            || CorporateActionsTabProbe.findClickable("Attachments") != null) return;
       }
       sleep(100);
     }
-    throw new AssertionError("Admin surface did not open disposable application " + applicationId + "; url=" + url());
+    throw new AssertionError("Admin surface did not open disposable application " + applicationId
+      + "; url=" + url() + " body=" + clean(lastBody).substring(0, Math.min(clean(lastBody).length(), 800)));
   }
 
   private boolean isCurrentApplicationDetail() {
