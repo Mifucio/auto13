@@ -75,7 +75,7 @@ public class StepDefinitions {
 
   @AfterStep
   public void afterStep(Scenario scenario) {
-    NetworkNoisePolicy.waitForBusinessData();
+    NetworkBusinessWaitRepair.waitForBusinessData();
     long durationMs = System.currentTimeMillis() - stepStartedAt;
     boolean slow = durationMs > SLOW_STEP_MS;
     PERFORMANCE_RESULTS.add("{\"type\":\"step\",\"name\":\"" + jsonEscape(currentStep) + "\",\"durationMs\":" + durationMs + ",\"slow\":" + slow + "}");
