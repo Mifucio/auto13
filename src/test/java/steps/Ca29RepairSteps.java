@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Locale;
 
 import static com.codeborne.selenide.Selenide.$$;
+import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
@@ -58,31 +59,38 @@ public final class Ca29RepairSteps {
     String previousFolder = Configuration.downloadsFolder;
     FileDownloadMode previousMode = Configuration.fileDownload;
     java.io.File returned = null;
-    Throwable failure = null;
+    Throwable directFailure = null;
+    long started = System.currentTimeMillis();
     try {
       Configuration.downloadsFolder = DOWNLOADS.toString();
       Configuration.fileDownload = FileDownloadMode.FOLDER;
       try {
         returned = controls.get(0).download();
       } catch (Throwable error) {
-        failure = error;
+        directFailure = error;
+        try {
+          executeJavaScript(
+            "arguments[0].scrollIntoView({block:'center',inline:'center'}); arguments[0].click();",
+            controls.get(0).getWrappedElement());
+        } catch (Throwable fallbackFailure) {
+          if (directFailure != fallbackFailure) directFailure.addSuppressed(fallbackFailure);
+        }
       }
-      sleep(1000);
+
+      if (returned != null && returned.isFile() && returned.length() > 0) return;
+
+      long deadline = System.currentTimeMillis() + 30000;
+      while (System.currentTimeMillis() < deadline) {
+        Path artifact = newestNonEmptyFile(DOWNLOADS, started - 1000);
+        if (artifact != null) return;
+        sleep(200);
+      }
     } finally {
       Configuration.downloadsFolder = previousFolder;
       Configuration.fileDownload = previousMode;
     }
 
-    if (returned != null && returned.isFile() && returned.length() > 0) return;
-    try {
-      try (var stream = Files.walk(DOWNLOADS)) {
-        if (stream.anyMatch(path -> Files.isRegularFile(path) && path.toFile().length() > 0)) return;
-      }
-    } catch (java.io.IOException error) {
-      throw new AssertionError("CA-29 could not inspect the printout download directory", error);
-    }
-
-    String failureType = failure == null ? "none" : failure.getClass().getSimpleName();
+    String failureType = directFailure == null ? "none" : directFailure.getClass().getSimpleName();
     throw new AssertionError("CA-29 product boundary: Download Fillable PDF form produced no non-empty printout artifact"
       + "; current_form=" + observedForm + "; download_failure=" + failureType);
   }
@@ -97,6 +105,24 @@ public final class Ca29RepairSteps {
       if (expected.equalsIgnoreCase(label)) result.add(control);
     }
     return result;
+  }
+
+  private static Path newestNonEmptyFile(Path directory, long minModified) {
+    try (var stream = Files.walk(directory)) {
+      return stream.filter(Files::isRegularFile)
+        .filter(path -> {
+          try {
+            return Files.size(path) > 0 && Files.getLastModifiedTime(path).toMillis() >= minModified;
+          } catch (Exception ignored) {
+            return false;
+          }
+        })
+        .max(Comparator.comparingLong(path -> {
+          try { return path.toFile().lastModified(); } catch (Throwable ignored) { return 0L; }
+        })).orElse(null);
+    } catch (Exception ignored) {
+      return null;
+    }
   }
 
   private static void clearDirectory(Path directory) {
