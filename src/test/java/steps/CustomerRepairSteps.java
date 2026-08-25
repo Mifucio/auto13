@@ -13,6 +13,7 @@ import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
+import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
@@ -21,36 +22,54 @@ public final class CustomerRepairSteps {
 
   @When("I select the represented company card {string}")
   public void selectRepresentedCompanyCard(String company) {
+    selectRepresentedCompanyCardOnSelectionPage(company);
+  }
+
+  /**
+   * The live company cards use Bootstrap stretched-link anchors. The anchor
+   * itself can have a zero-size box while its pseudo-element stretches across
+   * the visible card, so WebDriver's native click rejects it as not interactable.
+   * Triggering the unique observed anchor through DOM click preserves the same
+   * navigation without relying on a fictitious element box.
+   */
+  static void selectRepresentedCompanyCardOnSelectionPage(String company) {
     String current = url();
     if (current == null || !current.contains("/company-selection")) {
       throw new AssertionError("Expected company-selection route before choosing represented company, got " + current);
     }
 
-    String wanted = normalize(company);
-    List<SelenideElement> matches = new ArrayList<>();
-    for (SelenideElement link : $$("a.stretched-link")) {
-      if (!link.isDisplayed() || !link.isEnabled()) continue;
-      SelenideElement card = link.parent();
-      String observed = normalize(card.getText());
-      if (observed.contains(wanted)) matches.add(link);
-    }
-    if (matches.size() != 1) {
-      List<String> observedCards = new ArrayList<>();
-      for (SelenideElement link : $$("a.stretched-link")) {
-        if (link.isDisplayed()) observedCards.add(normalize(link.parent().getText()));
-      }
-      throw new AssertionError("Expected exactly one represented-company card '" + company
-        + "', found " + matches.size() + "; observed=" + observedCards);
+    Number matches = 0;
+    long cardsDeadline = System.currentTimeMillis() + Configuration.timeout;
+    while (System.currentTimeMillis() < cardsDeadline) {
+      matches = executeJavaScript(
+        "const wanted=String(arguments[0]).toLowerCase();"
+          + "const links=[...document.querySelectorAll('a.stretched-link')].filter(a=>{"
+          + " const card=a.parentElement;"
+          + " const text=(card?.innerText||'').replace(/\\s+/g,' ').trim().toLowerCase();"
+          + " return !!card && card.getClientRects().length>0 && text.includes(wanted);"
+          + "});"
+          + "if(links.length===1) links[0].click(); return links.length;",
+        normalize(company).toLowerCase(Locale.ROOT));
+      if (matches != null && matches.intValue() != 0) break;
+      sleep(100);
     }
 
-    matches.get(0).scrollIntoView("{block:'center'}").click();
+    if (matches == null || matches.intValue() != 1) {
+      String observed = executeJavaScript(
+        "return [...document.querySelectorAll('a.stretched-link')].map(a=>(a.parentElement?.innerText||'')"
+          + ".replace(/\\s+/g,' ').trim()).filter(Boolean).join(' | ')");
+      throw new AssertionError("Expected exactly one represented-company card '" + company
+        + "', found " + (matches == null ? 0 : matches.intValue()) + "; observed=" + observed);
+    }
+
     long deadline = System.currentTimeMillis() + Configuration.timeout;
     while (System.currentTimeMillis() < deadline) {
       String next = url();
-      if (next != null && !next.contains("/company-selection")) return;
+      if (next != null && !next.contains("/company-selection") && !next.contains("/login")) return;
       sleep(100);
     }
-    throw new AssertionError("Represented-company selection did not leave /company-selection for " + company);
+    throw new AssertionError("Represented-company selection did not leave /company-selection for " + company
+      + "; url=" + url());
   }
 
   @And("I ensure customer application language is English")
