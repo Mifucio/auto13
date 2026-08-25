@@ -7,7 +7,7 @@ Feature: Create, sign and review the disposable Additional issuance of Bonds app
     And I ensure customer application language is English
     When I open Corporate Actions from the customer menu
     And I click Create Application
-    And I choose the last "Additional issuance of Bonds" application type
+    And I choose the observed "Additional issuance of Bonds" application type
     Then the Application data form must be visible
     When I fill and safely save the disposable Additional issuance of Bonds form on the Both paid-up branch
     Then the Sign Document button must be visible

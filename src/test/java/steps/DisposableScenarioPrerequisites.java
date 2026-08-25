@@ -5,6 +5,8 @@ import com.codeborne.selenide.SelenideElement;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -13,45 +15,53 @@ import static com.codeborne.selenide.Condition.text;
 import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
+import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
+import static com.codeborne.selenide.WebDriverRunner.getWebDriver;
+import static com.codeborne.selenide.WebDriverRunner.hasWebDriverStarted;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
 /**
  * Makes disposable Corporate Actions scenarios independent from execution
- * order. The wrapper waits for async form/Dokobit controls, verifies represented
- * company identity, and routes create/save through the live-runtime repair
- * helper without changing the observable customer workflow.
+ * order and stale browser sessions. Application type selection is scoped to
+ * the live chooser modal; draft saving keeps type-specific business branches.
  */
 public final class DisposableScenarioPrerequisites {
   private static final String DEFAULT_COMPANY = "AutotestLtSingleSignee";
   private static final String ADDITIONAL_BONDS = "Additional issuance of Bonds";
+  private static final Path SESSION_COOKIES = Path.of("build", "private", "customer-session.cookies");
 
   private final DisposableDividendSteps flow;
   private final DisposableExecutionRepairSteps repair;
   private final AdditionalBondsBothBranchRepairSteps additionalBonds;
+  private final ApplicationTypeRepairSteps applicationTypes;
+  private final ReliableDisposableDraftRepairSteps reliableDraft;
 
   public DisposableScenarioPrerequisites(DisposableDividendSteps flow,
                                          DisposableExecutionRepairSteps repair,
-                                         AdditionalBondsBothBranchRepairSteps additionalBonds) {
+                                         AdditionalBondsBothBranchRepairSteps additionalBonds,
+                                         ApplicationTypeRepairSteps applicationTypes,
+                                         ReliableDisposableDraftRepairSteps reliableDraft) {
     this.flow = flow;
     this.repair = repair;
     this.additionalBonds = additionalBonds;
+    this.applicationTypes = applicationTypes;
+    this.reliableDraft = reliableDraft;
   }
 
   @Given("a fresh saved disposable {string} application exists")
   public void freshSavedDisposableApplication(String type) throws Exception {
-    loginWithDokobitReadinessRetry();
-    selectAndVerifyCompany(DEFAULT_COMPANY);
+    prepareAuthenticatedCompany(DEFAULT_COMPANY);
     CustomerRepairSteps.ensureCustomerEnglish();
     flow.openCorporateActions();
     repair.openCreateApplicationSafely();
-    flow.chooseLastApplicationType(type);
+    applicationTypes.chooseObservedApplicationType(type);
     flow.formVisible();
     awaitSourceInstrumentControl(type);
     if (ADDITIONAL_BONDS.equalsIgnoreCase(type)) {
       additionalBonds.fillAndSaveBothBranch();
     } else {
-      repair.fillAndSafelySaveDraft(type);
+      reliableDraft.fillAndReliablySaveDraft(type);
     }
     flow.signDocumentVisibleStep();
     flow.persistContract();
@@ -61,14 +71,36 @@ public final class DisposableScenarioPrerequisites {
   public void selectAndVerifyCompany(String company) {
     String current = url();
     if (current != null && current.contains("/company-selection")) {
-      // The company-selection heading is localized in the Mobile-ID account
-      // (EE in the captured run), so select by the observed card itself rather
-      // than requiring the English "Choose who you represent" landmark.
       CustomerRepairSteps.selectRepresentedCompanyCardOnSelectionPage(company);
     } else {
       flow.selectCompany(company);
     }
     assertOrRepairCompanyContext(company);
+  }
+
+  private void prepareAuthenticatedCompany(String company) {
+    AssertionError last = null;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        loginWithDokobitReadinessRetry();
+        selectAndVerifyCompany(company);
+        return;
+      } catch (AssertionError error) {
+        last = error;
+        String current = url();
+        String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase(Locale.ROOT);
+        boolean staleSession = (current != null && current.contains("/login"))
+          || message.contains("did not leave /company-selection")
+          || message.contains("customer authentication did not render")
+          || message.contains("not authorized")
+          || message.contains("not authorised");
+        if (!staleSession || attempt == 3) throw error;
+        System.out.println("DISPOSABLE_STALE_SESSION_RETRY attempt=" + attempt + " url=" + current);
+        clearCachedCustomerAuthentication();
+        sleep(800);
+      }
+    }
+    if (last != null) throw last;
   }
 
   private void loginWithDokobitReadinessRetry() {
@@ -86,6 +118,14 @@ public final class DisposableScenarioPrerequisites {
       }
     }
     if (last != null) throw last;
+  }
+
+  private static void clearCachedCustomerAuthentication() {
+    try { Files.deleteIfExists(SESSION_COOKIES); } catch (Exception ignored) { }
+    if (!hasWebDriverStarted()) return;
+    try { getWebDriver().manage().deleteAllCookies(); } catch (Throwable ignored) { }
+    try { executeJavaScript("try{localStorage.clear()}catch(e){} try{sessionStorage.clear()}catch(e){}"); }
+    catch (Throwable ignored) { }
   }
 
   private static void awaitSourceInstrumentControl(String type) {

@@ -14,11 +14,10 @@ import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
 
 /**
- * Keeps the Additional issuance of Bonds disposable scenario on the originally
- * observed "Both" paid-up branch. The captured failure was not caused by the
- * branch itself: the generated flow tried to treat an empty native select as a
- * custom dropdown and clicked an unrelated global <li>. Resolve the row through
- * its observed lookup button instead of changing the business choice to "Yes".
+ * Keeps the Additional issuance of Bonds disposable scenario on the observed
+ * "Both" paid-up branch. The live UI requires Additional nominal value to be
+ * at least 2000 and resolves the dependent account/name selects through the
+ * row-scoped holder lookup button.
  */
 public final class AdditionalBondsBothBranchRepairSteps {
   private static final String TYPE = "Additional issuance of Bonds";
@@ -42,8 +41,24 @@ public final class AdditionalBondsBothBranchRepairSteps {
       System.out.println("AIB_BOTH_REPAIR resolving observed bondholder row after native-select interception");
     }
 
+    setObservedMinimumAdditionalNominalValue();
     resolveObservedBondholderRow();
     repair.safelySavePreparedDraft();
+  }
+
+  private static void setObservedMinimumAdditionalNominalValue() {
+    SelenideElement field = $("#aib_additional_nominal_value");
+    if (!field.exists() || !field.isDisplayed() || !field.isEnabled()) {
+      throw new AssertionError("AIB Both branch did not expose #aib_additional_nominal_value");
+    }
+    field.setValue("2000");
+    executeJavaScript(
+      "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
+        + "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
+        + "arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",
+      field.getWrappedElement());
+    sleep(150);
+    System.out.println("AIB_ADDITIONAL_NOMINAL_VALUE 2000");
   }
 
   private static void resolveObservedBondholderRow() {
