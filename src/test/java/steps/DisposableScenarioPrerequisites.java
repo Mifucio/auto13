@@ -24,14 +24,18 @@ import static com.codeborne.selenide.WebDriverRunner.url;
  */
 public final class DisposableScenarioPrerequisites {
   private static final String DEFAULT_COMPANY = "AutotestLtSingleSignee";
+  private static final String ADDITIONAL_BONDS = "Additional issuance of Bonds";
 
   private final DisposableDividendSteps flow;
   private final DisposableExecutionRepairSteps repair;
+  private final AdditionalBondsBothBranchRepairSteps additionalBonds;
 
   public DisposableScenarioPrerequisites(DisposableDividendSteps flow,
-                                         DisposableExecutionRepairSteps repair) {
+                                         DisposableExecutionRepairSteps repair,
+                                         AdditionalBondsBothBranchRepairSteps additionalBonds) {
     this.flow = flow;
     this.repair = repair;
+    this.additionalBonds = additionalBonds;
   }
 
   @Given("a fresh saved disposable {string} application exists")
@@ -44,7 +48,11 @@ public final class DisposableScenarioPrerequisites {
     flow.chooseLastApplicationType(type);
     flow.formVisible();
     awaitSourceInstrumentControl(type);
-    repair.fillAndSafelySaveDraft(type);
+    if (ADDITIONAL_BONDS.equalsIgnoreCase(type)) {
+      additionalBonds.fillAndSaveBothBranch();
+    } else {
+      repair.fillAndSafelySaveDraft(type);
+    }
     flow.signDocumentVisibleStep();
     flow.persistContract();
   }
