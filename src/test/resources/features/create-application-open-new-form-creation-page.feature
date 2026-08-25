@@ -9,6 +9,7 @@ Feature: "Create application → open new form creation page"
     And I submit the observed form
     And I select the represented company card "ICELANDIC COMPANY NES-52 0000000001"
     And I ensure customer application language is English
-    And I navigate to "/corporate-actions"
-    When I open the observed application creation page
+    When I open Corporate Actions from the customer menu
+    And I click Create Application
+    And I choose the last "Bonus Issue" application type
     Then the Application data form must be visible

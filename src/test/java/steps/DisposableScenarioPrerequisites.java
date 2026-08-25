@@ -1,5 +1,6 @@
 package steps;
 
+import com.codeborne.selenide.Configuration;
 import com.codeborne.selenide.SelenideElement;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
@@ -17,9 +18,8 @@ import static com.codeborne.selenide.WebDriverRunner.url;
 
 /**
  * Makes disposable Corporate Actions scenarios independent from the execution
- * order of other Cucumber scenarios. The wrapper also verifies the represented
- * company after session reuse, because presence of the navbar alone does not
- * prove that the requested company is active.
+ * order of other Cucumber scenarios. The wrapper also waits for async form and
+ * Dokobit controls that were proven to render after the primary page landmark.
  */
 public final class DisposableScenarioPrerequisites {
   private static final String DEFAULT_COMPANY = "AutotestLtSingleSignee";
@@ -32,13 +32,14 @@ public final class DisposableScenarioPrerequisites {
 
   @Given("a fresh saved disposable {string} application exists")
   public void freshSavedDisposableApplication(String type) throws Exception {
-    flow.login();
+    loginWithDokobitReadinessRetry();
     selectAndVerifyCompany(DEFAULT_COMPANY);
     CustomerRepairSteps.ensureCustomerEnglish();
     flow.openCorporateActions();
     flow.clickCreateApplication();
     flow.chooseLastApplicationType(type);
     flow.formVisible();
+    awaitSourceInstrumentControl(type);
     flow.fillDisposableApplicationAndSaveDraft(type);
     flow.signDocumentVisibleStep();
     flow.persistContract();
@@ -48,14 +49,45 @@ public final class DisposableScenarioPrerequisites {
   public void selectAndVerifyCompany(String company) {
     String current = url();
     if (current != null && current.contains("/company-selection")) {
-      // The company-selection heading is localized in the Mobile-ID account
-      // (EE in the captured run), so select by the observed card itself rather
-      // than requiring the English "Choose who you represent" landmark.
       CustomerRepairSteps.selectRepresentedCompanyCardOnSelectionPage(company);
     } else {
       flow.selectCompany(company);
     }
     assertOrRepairCompanyContext(company);
+  }
+
+  private void loginWithDokobitReadinessRetry() {
+    AssertionError last = null;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        flow.login();
+        return;
+      } catch (AssertionError error) {
+        last = error;
+        String message = error.getMessage() == null ? "" : error.getMessage();
+        if (!message.contains("Dokobit country option") || attempt == 3) throw error;
+        System.out.println("DISPOSABLE_DOKOBIT_READINESS_RETRY attempt=" + attempt);
+        sleep(1200);
+      }
+    }
+    if (last != null) throw last;
+  }
+
+  private static void awaitSourceInstrumentControl(String type) {
+    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    while (System.currentTimeMillis() < deadline) {
+      for (SelenideElement field : $$("select[id*='security_name'], select[name*='security_name'], [role=combobox][id*='security_name']")) {
+        if (field.exists() && field.isDisplayed() && field.isEnabled()) return;
+      }
+      sleep(100);
+    }
+    List<String> observed = new ArrayList<>();
+    for (SelenideElement field : $$("select, [role=combobox]")) {
+      if (!field.exists()) continue;
+      observed.add(field.getTagName() + "#" + String.valueOf(field.getAttribute("id"))
+        + " visible=" + field.isDisplayed() + " enabled=" + field.isEnabled());
+    }
+    throw new AssertionError("Disposable " + type + " form did not finish rendering its source instrument control; observed=" + observed);
   }
 
   private static void assertOrRepairCompanyContext(String company) {
