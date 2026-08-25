@@ -9,7 +9,7 @@ Feature: Create, sign and review the disposable Bonus Issue application
     And I click Create Application
     And I choose the last "Bonus Issue" application type
     Then the Application data form must be visible
-    When I fill the disposable "Bonus Issue" form and save as draft
+    When I fill and safely save the disposable "Bonus Issue" form as draft
     Then the Sign Document button must be visible
     And I persist the disposable application ID and remembered source instrument
 
@@ -22,13 +22,13 @@ Feature: Create, sign and review the disposable Bonus Issue application
     When I click the Sign button for the disposable application
     And I sign the document with Mobile ID phone number "60000666"
     Then Signature is valid must appear within 120 seconds
-    When I download the signed disposable document
-    Then the signed document must exist in the file system
+    When I download the signed disposable document through the observed download control
+    Then the repaired signed disposable document exists in the file system
 
   Scenario: View the History tab of a disposable Bonus Issue application
     Given a fresh saved disposable "Bonus Issue" application exists
     When I open the "History" tab of the disposable application
-    Then the disposable application History must show the created application and, if signed, the signed application
+    Then the disposable draft History contains the current application creation event
 
   Scenario: View the Attachments tab of a disposable Bonus Issue application
     Given a fresh saved disposable "Bonus Issue" application exists
