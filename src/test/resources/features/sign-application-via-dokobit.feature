@@ -13,5 +13,5 @@ Feature: "Sign one disposable application via Dokobit"
     When I click the Sign button for the disposable application
     And I sign the document with Mobile ID phone number "60000666"
     Then Signature is valid must appear within 120 seconds
-    When I download the signed disposable document
-    Then the signed document must exist in the file system
+    When I download the signed disposable document through the observed download control
+    Then the repaired signed disposable document exists in the file system
