@@ -4,7 +4,7 @@ Feature: View History and Attachments tabs of a disposable Dividend Payment appl
   Scenario: View the History tab of a disposable application
     Given a fresh saved disposable "Dividend Payment" application exists
     When I open the "History" tab of the disposable application
-    Then the disposable application History must show the created application and, if signed, the signed application
+    Then the disposable draft History contains the current application creation event
 
   Scenario: View the Attachments tab of a disposable application
     Given a fresh saved disposable "Dividend Payment" application exists
