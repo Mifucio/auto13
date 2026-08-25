@@ -67,6 +67,12 @@ public final class DisposableScenarioPrerequisites {
     flow.persistContract();
   }
 
+  /** Re-establishes the cheap authenticated customer context without creating data. */
+  void prepareReusableCustomerContext() {
+    prepareAuthenticatedCompany(DEFAULT_COMPANY);
+    CustomerRepairSteps.ensureCustomerEnglish();
+  }
+
   @And("I select and verify company {string} for the disposable application")
   public void selectAndVerifyCompany(String company) {
     String current = url();
