@@ -9,7 +9,7 @@ Feature: Create, sign and review the disposable Interest Payment application
     And I click Create Application
     And I choose the observed "Interest Payment" application type
     Then the Application data form must be visible
-    When I fill and safely save the disposable "Interest Payment" form as draft
+    When I fill and reliably save the disposable "Interest Payment" form as draft
     Then the Sign Document button must be visible
     And I persist the disposable application ID and remembered source instrument
 
