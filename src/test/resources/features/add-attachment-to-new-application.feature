@@ -11,7 +11,7 @@ Feature: Add attachment to a new Corporate Actions application
     And I ensure customer application language is English
     When I open Corporate Actions from the customer menu
     And I click Create Application
-    And I choose the last "Bonus Issue" application type
+    And I choose the observed "Bonus Issue" application type
     Then the Application data form must be visible
     When I stage the harmless CA-22 fixture in the observed Other document input
     Then the CA-22 Other document input contains exactly one staged disposable attachment

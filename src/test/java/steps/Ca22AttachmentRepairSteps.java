@@ -25,23 +25,41 @@ public final class Ca22AttachmentRepairSteps {
   public void stageFixtureInObservedOtherInput() {
     stagedFixture = fixturePath();
     SelenideElement input = awaitOtherInput();
+
+    // Angular may consume and clear input.files synchronously after change.
+    // Record the browser-delivered FileList at the change boundary itself;
+    // this is the evidence CA-22 needs, not the framework's post-handler state.
+    executeJavaScript(
+      "window.__ca22Staged=null;"
+        + "arguments[0].addEventListener('change',function handler(e){"
+        + " const f=e.target.files; window.__ca22Staged={count:f?f.length:0,name:(f&&f.length)?f[0].name:''};"
+        + " e.target.removeEventListener('change',handler);"
+        + "},{once:true});",
+      input.getWrappedElement());
     input.uploadFile(stagedFixture.toFile());
   }
 
   @Then("the CA-22 Other document input contains exactly one staged disposable attachment")
   public void otherInputContainsOneFixture() {
     if (stagedFixture == null) throw new AssertionError("CA-22 fixture was not staged before verification");
-    SelenideElement input = awaitOtherInput();
-    Number count = executeJavaScript("return arguments[0].files ? arguments[0].files.length : 0;",
-      input.getWrappedElement());
-    if (count == null || count.intValue() != 1) {
-      throw new AssertionError("CA-22 Other input expected one staged file, found "
-        + (count == null ? 0 : count.intValue()));
-    }
-    String value = input.getValue();
-    String expected = stagedFixture.getFileName().toString().toLowerCase(Locale.ROOT);
-    if (value == null || !value.toLowerCase(Locale.ROOT).endsWith(expected)) {
-      throw new AssertionError("CA-22 Other input did not retain fixture " + stagedFixture.getFileName());
+    String expected = stagedFixture.getFileName().toString();
+    Object captured = executeJavaScript(
+      "const x=window.__ca22Staged; return x ? JSON.stringify(x) : '';"
+    );
+    String evidence = captured == null ? "" : captured.toString();
+    if (!evidence.contains("\"count\":1") || !evidence.contains("\"name\":\"" + jsJson(expected) + "\"")) {
+      // Fallback for renderers that keep the native FileList instead of
+      // consuming it. Never require both representations simultaneously.
+      SelenideElement input = awaitOtherInput();
+      Number count = executeJavaScript("return arguments[0].files ? arguments[0].files.length : 0;",
+        input.getWrappedElement());
+      String value = input.getValue();
+      boolean nativeEvidence = count != null && count.intValue() == 1
+        && value != null && value.toLowerCase(Locale.ROOT).endsWith(expected.toLowerCase(Locale.ROOT));
+      if (!nativeEvidence) {
+        throw new AssertionError("CA-22 upload change did not carry exactly one expected fixture; captured="
+          + evidence + "; nativeCount=" + (count == null ? 0 : count.intValue()));
+      }
     }
   }
 
@@ -60,10 +78,13 @@ public final class Ca22AttachmentRepairSteps {
     long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 10000);
     while (System.currentTimeMillis() < deadline) {
       String current = url();
-      if (current == null || !current.contains("/corporate-actions/application-form")) return;
+      if (current == null || !current.contains("/corporate-actions/application-form")) {
+        stagedFixture = null;
+        return;
+      }
       sleep(100);
     }
-    stagedFixture = null;
+    throw new AssertionError("CA-22 discard did not leave the unsaved application form; url=" + url());
   }
 
   private static SelenideElement awaitOtherInput() {
@@ -88,5 +109,9 @@ public final class Ca22AttachmentRepairSteps {
     } catch (Exception error) {
       throw new AssertionError("Could not resolve CA-22 fixture", error);
     }
+  }
+
+  private static String jsJson(String value) {
+    return value.replace("\\", "\\\\").replace("\"", "\\\"");
   }
 }

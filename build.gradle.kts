@@ -66,6 +66,15 @@ tasks.test {
   jvmArgs("-Djava.net.preferIPv4Stack=true")
   systemProperty("allure.results.directory", file("build/allure-results").absolutePath)
 
+  // Gradle's -D properties belong to the Gradle JVM; they are not guaranteed
+  // to reach the forked test JVM. Explicitly forward Cucumber dry-run so the
+  // structural-validation workflow never executes live browser scenarios.
+  val dryRun = System.getProperty("cucumber.execution.dry-run")?.takeIf { it.isNotBlank() }
+  if (dryRun != null) {
+    systemProperty("cucumber.execution.dry-run", dryRun)
+    println("cucumber.execution.dry-run=$dryRun")
+  }
+
   // Make Cucumber/step diagnostics and full root-cause stack traces visible in
   // the terminal. Persistent per-scenario copies are also written by
   // runner.FailureLoggingPlugin under build/failure-logs/<run-id>/.
@@ -154,4 +163,3 @@ tasks.register<JavaExec>("regressionReport") {
   systemProperty("runId", providers.gradleProperty("runId").orElse("local").get())
   systemProperty("baselineId", providers.gradleProperty("baselineId").orElse("").get())
 }
-

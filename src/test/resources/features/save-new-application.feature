@@ -8,7 +8,7 @@ Feature: Create disposable Dividend Payment application
     And I ensure customer application language is English
     When I open Corporate Actions from the customer menu
     And I click Create Application
-    And I choose the last "Dividend Payment" application type
+    And I choose the observed "Dividend Payment" application type
     Then the Application data form must be visible
     When I select and remember a source instrument
     And I set Payment for one security to "1"
@@ -17,6 +17,6 @@ Feature: Create disposable Dividend Payment application
     And I set Net dividend amount transferred to paying agent to the calculated total payment amount
     And I set Ex-date within the next 7 days, retrying another date on validation error
     Then Record date and Payment date must be populated
-    When I safely save the prepared disposable application as draft
+    When I reliably save the prepared disposable application as draft
     Then the Sign Document button must be visible
     And I persist the disposable application ID and remembered source instrument
