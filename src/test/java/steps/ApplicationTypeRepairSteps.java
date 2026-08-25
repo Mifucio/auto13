@@ -13,12 +13,7 @@ import static com.codeborne.selenide.Selenide.open;
 import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
-/**
- * Selects a Corporate Actions application type only inside the live
- * "Choose application type" modal. The background list contains form-name
- * filters with the same labels, so global text matching is intentionally
- * forbidden here.
- */
+/** Selects a Corporate Actions type only inside the live chooser modal. */
 public final class ApplicationTypeRepairSteps {
   private final DisposableDividendSteps flow;
 
@@ -32,90 +27,88 @@ public final class ApplicationTypeRepairSteps {
     String lastBody = "";
 
     for (int attempt = 1; attempt <= 3; attempt++) {
-      SelenideElement modal = awaitSingleTypeModal();
-      List<SelenideElement> rows = typeRows(modal, type);
-      lastInventory = modalInventory(modal);
-      if (rows.isEmpty()) {
+      SelenideElement target = awaitTypeTarget(type, 15000);
+      if (target == null) {
+        SelenideElement modal = singleVisibleTypeModal();
+        lastInventory = modal == null ? "<modal unavailable>" : modalInventory(modal);
+        if (attempt < 3) {
+          reopenApplicationTypeModal();
+          continue;
+        }
         throw new AssertionError("Observed application type '" + type
-          + "' did not appear in the Choose application type modal; url=" + url()
+          + "' did not appear after async chooser loading; url=" + url()
           + "; modalTypes=" + lastInventory);
       }
 
-      // The captured modal is a clickable .row with a .col label. The old
-      // generated suite clicked the inner label and succeeded. Clicking the
-      // parent row through Javascript occasionally navigated to
-      // /application-form//country/XX/new (missing application-type id),
-      // leaving an empty Application data shell. Use a real pointer-style
-      // click on the visible label cell so Angular receives the same event
-      // target as a user click.
-      SelenideElement row = rows.get(rows.size() - 1);
-      SelenideElement target = typeLabelCell(row, type);
       target.scrollIntoView("{block:'center',inline:'center'}").click();
       flow.setAppType(type);
-
       if (awaitApplicationData(10000)) return;
       try { lastBody = $("body").getText(); } catch (Throwable ignored) { }
 
       if (attempt < 3) {
-        System.out.println("APPLICATION_TYPE_RETRY type=" + type + " attempt=" + attempt
-          + " url=" + url());
+        System.out.println("APPLICATION_TYPE_RETRY type=" + type + " attempt=" + attempt + " url=" + url());
         reopenApplicationTypeModal();
       }
     }
 
     throw new AssertionError("Selecting observed application type '" + type
       + "' did not render Application data after retries; url=" + url()
-      + "; body=" + trim(lastBody, 1000)
-      + "; modalTypes=" + lastInventory);
+      + "; body=" + trim(lastBody, 1000) + "; modalTypes=" + lastInventory);
   }
 
-  private static SelenideElement awaitSingleTypeModal() {
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 15000);
+  private static SelenideElement awaitTypeTarget(String type, long timeoutMs) {
+    long deadline = System.currentTimeMillis() + timeoutMs;
     while (System.currentTimeMillis() < deadline) {
       List<SelenideElement> modals = visibleTypeModals();
-      if (modals.size() == 1) return modals.get(0);
       if (modals.size() > 1) {
         throw new AssertionError("Expected one visible Choose application type modal, found " + modals.size());
       }
+      if (modals.size() == 1) {
+        SelenideElement modal = modals.get(0);
+        List<SelenideElement> labels = new ArrayList<>();
+        for (SelenideElement label : modal.$$("label.form-check-label")) {
+          if (label.isDisplayed() && clean(type).equalsIgnoreCase(clean(label.getText()))) labels.add(label);
+        }
+        if (!labels.isEmpty()) return labels.get(labels.size() - 1);
+
+        List<SelenideElement> rows = typeRows(modal, type);
+        if (!rows.isEmpty()) return typeLabelCell(rows.get(rows.size() - 1), type);
+      }
       sleep(100);
     }
-    throw new AssertionError("Choose application type modal did not become visible; url=" + url());
+    return null;
   }
 
   private static void reopenApplicationTypeModal() {
-    // A malformed new-application shell is unsaved and disposable. Prefer its
-    // exact Discard action; if the shell does not expose it, return to the list
-    // directly. No application has been saved at this point.
-    List<SelenideElement> discard = exactVisibleControls("Discard");
-    if (discard.size() == 1) {
-      discard.get(0).click();
-      long leaveDeadline = System.currentTimeMillis() + 5000;
-      while (System.currentTimeMillis() < leaveDeadline) {
-        if (url() != null && !url().contains("/application-form/")) break;
-        sleep(100);
-      }
-    }
-    if (url() == null || url().contains("/application-form/")) open("/corporate-actions");
-
-    long listDeadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 15000);
-    while (System.currentTimeMillis() < listDeadline) {
+    // No application has been saved at this point. Returning to the list is a
+    // deterministic reset for an empty/malformed chooser or unsaved shell.
+    open("/corporate-actions");
+    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 15000);
+    while (System.currentTimeMillis() < deadline) {
       List<SelenideElement> create = exactVisibleControls("Create Application");
       if (create.size() == 1) {
         create.get(0).click();
-        awaitSingleTypeModal();
-        return;
+        long modalDeadline = System.currentTimeMillis() + 10000;
+        while (System.currentTimeMillis() < modalDeadline) {
+          if (singleVisibleTypeModal() != null) return;
+          sleep(100);
+        }
+        break;
       }
       sleep(100);
     }
-    throw new AssertionError("Could not reopen Create Application after malformed application-type navigation; url=" + url());
+    throw new AssertionError("Could not reopen Create Application chooser; url=" + url());
+  }
+
+  private static SelenideElement singleVisibleTypeModal() {
+    List<SelenideElement> modals = visibleTypeModals();
+    return modals.size() == 1 ? modals.get(0) : null;
   }
 
   private static List<SelenideElement> visibleTypeModals() {
     List<SelenideElement> result = new ArrayList<>();
     for (SelenideElement modal : $$("ngb-modal-window,[role=dialog],.modal.show")) {
-      if (!modal.isDisplayed()) continue;
-      String text = clean(modal.getText());
-      if (text.contains("Choose application type")) result.add(modal);
+      if (modal.isDisplayed() && clean(modal.getText()).contains("Choose application type")) result.add(modal);
     }
     return result;
   }
@@ -124,19 +117,15 @@ public final class ApplicationTypeRepairSteps {
     List<SelenideElement> result = new ArrayList<>();
     String wanted = clean(type);
     for (SelenideElement row : modal.$$(".modal-body .row")) {
-      if (!row.isDisplayed()) continue;
-      if (wanted.equalsIgnoreCase(clean(row.getText()))) result.add(row);
+      if (row.isDisplayed() && wanted.equalsIgnoreCase(clean(row.getText()))) result.add(row);
     }
     return result;
   }
 
   private static SelenideElement typeLabelCell(SelenideElement row, String type) {
-    List<SelenideElement> matches = new ArrayList<>();
-    for (SelenideElement cell : row.$$(".col,.col-auto,.col-1,div")) {
-      if (!cell.isDisplayed()) continue;
-      if (clean(type).equalsIgnoreCase(clean(cell.getText()))) matches.add(cell);
+    for (SelenideElement cell : row.$$("label.form-check-label,.col,.col-auto,.col-1,div")) {
+      if (cell.isDisplayed() && clean(type).equalsIgnoreCase(clean(cell.getText()))) return cell;
     }
-    if (!matches.isEmpty()) return matches.get(0);
     return row;
   }
 
@@ -145,15 +134,9 @@ public final class ApplicationTypeRepairSteps {
     while (System.currentTimeMillis() < deadline) {
       try {
         String current = url();
-        // This exact route was captured in the stopped run. It cannot render a
-        // form because the application-type segment is empty; retry immediately
-        // instead of burning the full element timeout on an impossible state.
         if (current != null && current.contains("/application-form//country/")) return false;
-
         String body = $("body").getText();
-        boolean formVisible = $("form").isDisplayed();
-        boolean modalGone = visibleTypeModals().isEmpty();
-        if (formVisible && modalGone && body.contains("Application data")) return true;
+        if ($("form").isDisplayed() && visibleTypeModals().isEmpty() && body.contains("Application data")) return true;
       } catch (Throwable ignored) { }
       sleep(100);
     }
@@ -174,10 +157,10 @@ public final class ApplicationTypeRepairSteps {
 
   private static String modalInventory(SelenideElement modal) {
     List<String> values = new ArrayList<>();
-    for (SelenideElement row : modal.$$(".modal-body .row")) {
-      if (!row.isDisplayed()) continue;
-      String value = clean(row.getText());
-      if (!value.isBlank()) values.add(value);
+    for (SelenideElement label : modal.$$("label.form-check-label,.modal-body .row")) {
+      if (!label.isDisplayed()) continue;
+      String value = clean(label.getText());
+      if (!value.isBlank() && !values.contains(value)) values.add(value);
     }
     return values.toString();
   }

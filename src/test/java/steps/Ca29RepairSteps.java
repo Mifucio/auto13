@@ -1,6 +1,7 @@
 package steps;
 
 import com.codeborne.selenide.Configuration;
+import com.codeborne.selenide.FileDownloadMode;
 import com.codeborne.selenide.SelenideElement;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
@@ -39,53 +40,61 @@ public final class Ca29RepairSteps {
       }
       sleep(150);
     }
-    throw new AssertionError("CA-29 found no current visible Submitted application with form '" + form + "'");
+    throw new AssertionError("CA-29 found no current Submitted application with form '" + form + "'");
   }
 
   @Then("the current Corporate Actions Fillable PDF printout download exists")
   public void currentFillablePdfPrintoutDownloadExists() {
-    if (observedForm.isBlank()) {
-      throw new AssertionError("CA-29 printout probe ran without a current Submitted application observation");
-    }
-
+    if (observedForm.isBlank()) throw new AssertionError("CA-29 printout probe ran without application observation");
     List<SelenideElement> controls = exactVisibleControls("Download Fillable PDF form");
-    if (controls.size() != 1) {
-      throw new AssertionError("CA-29 expected exactly one visible Download Fillable PDF form control, found " + controls.size());
-    }
+    if (controls.size() != 1) throw new AssertionError("CA-29 expected one Download Fillable PDF form control, found " + controls.size());
 
     Path downloads = Path.of(Configuration.downloadsFolder).toAbsolutePath().normalize();
     clearDirectory(downloads);
     downloadedPrintout = null;
-    long started = System.currentTimeMillis();
+    executeJavaScript("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();", controls.get(0).getWrappedElement());
 
-    // Live evidence shows this control opens a form-type chooser; it is not a
-    // direct download link. Click it normally, choose the observed form in the
-    // modal, then wait for Chrome's real download in the already configured
-    // download directory.
-    executeJavaScript("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();",
-      controls.get(0).getWrappedElement());
     SelenideElement modal = awaitChooseTypeModal();
     List<SelenideElement> typeRows = exactTypeRows(modal, observedForm);
     if (typeRows.isEmpty()) {
-      throw new AssertionError("CA-29 Fillable PDF chooser exposed no observed form '" + observedForm
-        + "'; options=" + modalInventory(modal));
+      throw new AssertionError("CA-29 chooser exposed no form '" + observedForm + "'; options=" + modalInventory(modal));
     }
     SelenideElement selected = typeRows.get(typeRows.size() - 1);
-    executeJavaScript("arguments[0].scrollIntoView({block:'center'}); arguments[0].click();",
-      selected.getWrappedElement());
 
-    long deadline = System.currentTimeMillis() + 30000;
-    while (System.currentTimeMillis() < deadline) {
-      Path artifact = newestNonEmptyFile(downloads, started - 1000);
-      if (artifact != null) {
-        downloadedPrintout = artifact;
+    String previousFolder = Configuration.downloadsFolder;
+    FileDownloadMode previousMode = Configuration.fileDownload;
+    java.io.File returned = null;
+    Throwable directFailure = null;
+    long started = System.currentTimeMillis();
+    try {
+      Configuration.downloadsFolder = downloads.toString();
+      Configuration.fileDownload = FileDownloadMode.FOLDER;
+      try {
+        returned = selected.download();
+      } catch (Throwable failure) {
+        directFailure = failure;
+        try { selected.click(); } catch (Throwable ignored) { }
+      }
+      if (returned != null && returned.isFile() && returned.length() > 0) {
+        downloadedPrintout = returned.toPath().toAbsolutePath().normalize();
         return;
       }
-      sleep(200);
+      long deadline = System.currentTimeMillis() + 30000;
+      while (System.currentTimeMillis() < deadline) {
+        Path artifact = newestNonEmptyFile(downloads, started - 1000);
+        if (artifact != null) {
+          downloadedPrintout = artifact;
+          return;
+        }
+        sleep(200);
+      }
+    } finally {
+      Configuration.downloadsFolder = previousFolder;
+      Configuration.fileDownload = previousMode;
     }
 
-    throw new AssertionError("CA-29 product boundary: Fillable PDF chooser completed but produced no non-empty printout"
-      + "; current_form=" + observedForm + "; downloads=" + downloads);
+    throw new AssertionError("CA-29 Fillable PDF chooser produced no artifact; form=" + observedForm
+      + "; direct_failure=" + (directFailure == null ? "none" : directFailure.getClass().getSimpleName()));
   }
 
   private static SelenideElement awaitChooseTypeModal() {
@@ -96,17 +105,19 @@ public final class Ca29RepairSteps {
         if (modal.isDisplayed() && clean(modal.getText()).contains("Choose application type")) matches.add(modal);
       }
       if (matches.size() == 1) return matches.get(0);
-      if (matches.size() > 1) {
-        throw new AssertionError("CA-29 expected one visible application-type chooser, found " + matches.size());
-      }
+      if (matches.size() > 1) throw new AssertionError("CA-29 expected one chooser, found " + matches.size());
       sleep(100);
     }
-    throw new AssertionError("CA-29 Download Fillable PDF form did not open the observed application-type chooser");
+    throw new AssertionError("CA-29 Download Fillable PDF form did not open chooser");
   }
 
   private static List<SelenideElement> exactTypeRows(SelenideElement modal, String expected) {
     List<SelenideElement> result = new ArrayList<>();
     String wanted = clean(expected);
+    for (SelenideElement label : modal.$$("label.form-check-label")) {
+      if (label.isDisplayed() && wanted.equalsIgnoreCase(clean(label.getText()))) result.add(label);
+    }
+    if (!result.isEmpty()) return result;
     for (SelenideElement row : modal.$$(".modal-body .row")) {
       if (row.isDisplayed() && wanted.equalsIgnoreCase(clean(row.getText()))) result.add(row);
     }
@@ -115,10 +126,10 @@ public final class Ca29RepairSteps {
 
   private static String modalInventory(SelenideElement modal) {
     List<String> result = new ArrayList<>();
-    for (SelenideElement row : modal.$$(".modal-body .row")) {
-      if (!row.isDisplayed()) continue;
-      String text = clean(row.getText());
-      if (!text.isBlank()) result.add(text);
+    for (SelenideElement e : modal.$$("label.form-check-label,.modal-body .row")) {
+      if (!e.isDisplayed()) continue;
+      String text = clean(e.getText());
+      if (!text.isBlank() && !result.contains(text)) result.add(text);
     }
     return result.toString();
   }
@@ -140,28 +151,20 @@ public final class Ca29RepairSteps {
       return stream.filter(Files::isRegularFile)
         .filter(path -> !path.getFileName().toString().endsWith(".part"))
         .filter(path -> {
-          try {
-            return Files.size(path) > 0 && Files.getLastModifiedTime(path).toMillis() >= minModified;
-          } catch (Exception ignored) {
-            return false;
-          }
+          try { return Files.size(path) > 0 && Files.getLastModifiedTime(path).toMillis() >= minModified; }
+          catch (Exception ignored) { return false; }
         })
         .max(Comparator.comparingLong(path -> {
-          try { return Files.getLastModifiedTime(path).toMillis(); }
-          catch (Exception ignored) { return 0L; }
+          try { return Files.getLastModifiedTime(path).toMillis(); } catch (Exception ignored) { return 0L; }
         })).orElse(null);
-    } catch (Exception ignored) {
-      return null;
-    }
+    } catch (Exception ignored) { return null; }
   }
 
   private static void clearDirectory(Path directory) {
     try {
       Files.createDirectories(directory);
       try (var paths = Files.walk(directory)) {
-        for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
-          if (!path.equals(directory)) Files.deleteIfExists(path);
-        }
+        for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) if (!path.equals(directory)) Files.deleteIfExists(path);
       }
     } catch (Exception error) {
       throw new AssertionError("CA-29 could not clear download directory " + directory, error);

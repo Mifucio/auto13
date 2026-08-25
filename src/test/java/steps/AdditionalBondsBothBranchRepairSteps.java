@@ -13,12 +13,7 @@ import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
 
-/**
- * Keeps the Additional issuance of Bonds disposable scenario on the observed
- * "Both" paid-up branch. The live UI requires Additional nominal value to be
- * at least 2000 and resolves the dependent account/name selects through the
- * row-scoped holder lookup button.
- */
+/** Keeps Additional issuance of Bonds on the observed Both paid-up branch. */
 public final class AdditionalBondsBothBranchRepairSteps {
   private static final String TYPE = "Additional issuance of Bonds";
 
@@ -37,8 +32,8 @@ public final class AdditionalBondsBothBranchRepairSteps {
       flow.fillDisposableApplicationAndSaveDraft(TYPE);
       return;
     } catch (Throwable failure) {
-      if (!isCapturedNativeSelectInterception(failure)) rethrow(failure);
-      System.out.println("AIB_BOTH_REPAIR resolving observed bondholder row after native-select interception");
+      if (!isRepairableAibFailure(failure)) rethrow(failure);
+      System.out.println("AIB_BOTH_REPAIR root=" + rootCause(failure).getClass().getSimpleName());
     }
 
     setObservedMinimumAdditionalNominalValue();
@@ -51,13 +46,7 @@ public final class AdditionalBondsBothBranchRepairSteps {
     if (!field.exists() || !field.isDisplayed() || !field.isEnabled()) {
       throw new AssertionError("AIB Both branch did not expose #aib_additional_nominal_value");
     }
-    field.setValue("2000");
-    executeJavaScript(
-      "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
-        + "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
-        + "arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",
-      field.getWrappedElement());
-    sleep(150);
+    setAndDispatch(field, "2000");
     System.out.println("AIB_ADDITIONAL_NOMINAL_VALUE 2000");
   }
 
@@ -72,14 +61,12 @@ public final class AdditionalBondsBothBranchRepairSteps {
     SelenideElement account = $("#aib_bht_account_0");
     SelenideElement name = $("#aib_bht_name_0");
     SelenideElement amount = $("#aib_bht_amount_of_bonds_issued_0");
-
     if (!row.exists() || !code.exists() || !account.exists() || !name.exists() || !amount.exists()) {
       throw new AssertionError("AIB Both branch did not expose the observed bondholder row controls");
     }
+
     String holderCode = safe(code.getValue()).trim();
-    if (holderCode.isBlank()) {
-      throw new AssertionError("AIB Both branch holder code was empty before the observed lookup");
-    }
+    if (holderCode.isBlank()) throw new AssertionError("AIB Both branch holder code was empty before lookup");
 
     if (!hasSelectableOption(account) || !hasSelectableOption(name)) {
       SelenideElement search = row.$("button.button-search");
@@ -88,7 +75,6 @@ public final class AdditionalBondsBothBranchRepairSteps {
       }
       executeJavaScript("arguments[0].scrollIntoView({block:'center',inline:'center'}); arguments[0].click();",
         search.getWrappedElement());
-
       long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 10000);
       while (System.currentTimeMillis() < deadline) {
         if (hasSelectableOption(account) && hasSelectableOption(name)) break;
@@ -97,19 +83,24 @@ public final class AdditionalBondsBothBranchRepairSteps {
     }
 
     if (!hasSelectableOption(account) || !hasSelectableOption(name)) {
-      throw new AssertionError("AIB bondholder lookup returned no selectable account/name options for observed code "
-        + holderCode);
+      throw new AssertionError("AIB bondholder lookup returned no account/name options for code " + holderCode);
     }
 
     selectFirstNonEmpty(account);
     selectFirstNonEmpty(name);
-    if (safe(amount.getValue()).trim().isBlank()) amount.setValue("1");
+
+    String accountLabel = new Select(account.getWrappedElement()).getFirstSelectedOption().getText();
+    boolean distributionAccount = safe(accountLabel).toLowerCase(Locale.ROOT).contains("distribution account");
+    SelenideElement nominal = distributionAccount ? $("#aib_nominal_value_unpaid") : $("#aib_nominal_value_paid");
+    String requiredAmount = numericValue(nominal.exists() ? nominal.getValue() : "");
+    if (requiredAmount.isBlank()) requiredAmount = distributionAccount ? "0" : "2000";
+    setAndDispatch(amount, requiredAmount);
+    System.out.println("AIB_DISTRIBUTION_AMOUNT account=" + accountLabel + " amount=" + requiredAmount);
   }
 
   private static boolean hasSelectableOption(SelenideElement field) {
     if (!field.exists() || !"select".equalsIgnoreCase(field.getTagName())) return false;
-    Select select = new Select(field.getWrappedElement());
-    for (org.openqa.selenium.WebElement option : select.getOptions()) {
+    for (org.openqa.selenium.WebElement option : new Select(field.getWrappedElement()).getOptions()) {
       String value = safe(option.getAttribute("value")).trim();
       String label = safe(option.getText()).trim();
       if (option.isEnabled() && !value.isBlank() && !"null".equalsIgnoreCase(value)
@@ -128,22 +119,35 @@ public final class AdditionalBondsBothBranchRepairSteps {
       if (!option.isEnabled() || value.isBlank() || "null".equalsIgnoreCase(value)
           || label.toLowerCase(Locale.ROOT).contains("select")) continue;
       select.selectByIndex(index);
-      executeJavaScript(
-        "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
-          + "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));",
-        field.getWrappedElement());
       return;
     }
-    throw new AssertionError("AIB observed native select exposed no selectable non-empty option: "
-      + safe(field.getAttribute("id")));
+    throw new AssertionError("AIB native select exposed no non-empty option: " + safe(field.getAttribute("id")));
   }
 
-  private static boolean isCapturedNativeSelectInterception(Throwable failure) {
+  private static void setAndDispatch(SelenideElement field, String value) {
+    field.setValue(value);
+    executeJavaScript(
+      "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));"
+        + "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
+        + "arguments[0].dispatchEvent(new Event('blur',{bubbles:true}));",
+      field.getWrappedElement());
+    sleep(150);
+  }
+
+  private static String numericValue(String raw) {
+    String value = safe(raw).replace("\u00a0", "").replace(" ", "").replace("'", "");
+    if (value.contains(",") && !value.contains(".")) value = value.replace(',', '.');
+    else value = value.replace(",", "");
+    return value.matches("-?[0-9]+(?:\\.[0-9]+)?") ? value : "";
+  }
+
+  private static boolean isRepairableAibFailure(Throwable failure) {
     Throwable root = rootCause(failure);
     String message = safe(root.getMessage()).toLowerCase(Locale.ROOT);
     return root instanceof ElementClickInterceptedException
       || root.getClass().getSimpleName().contains("ElementClickIntercepted")
-      || message.contains("click intercepted");
+      || message.contains("click intercepted")
+      || message.contains("save as draft did not produce");
   }
 
   private static Throwable rootCause(Throwable failure) {
@@ -158,7 +162,5 @@ public final class AdditionalBondsBothBranchRepairSteps {
     throw new AssertionError("Unexpected AIB disposable failure", failure);
   }
 
-  private static String safe(String value) {
-    return value == null ? "" : value;
-  }
+  private static String safe(String value) { return value == null ? "" : value; }
 }
