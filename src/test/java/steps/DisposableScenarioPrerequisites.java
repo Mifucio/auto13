@@ -63,6 +63,43 @@ public final class DisposableScenarioPrerequisites {
     assertOrRepairCompanyContext(company);
   }
 
+  private void loginWithDokobitReadinessRetry() {
+    AssertionError last = null;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        flow.login();
+        return;
+      } catch (AssertionError error) {
+        last = error;
+        String message = error.getMessage() == null ? "" : error.getMessage();
+        if (!message.contains("Dokobit country option") || attempt == 3) throw error;
+        System.out.println("DISPOSABLE_LOGIN_READINESS_RETRY attempt=" + attempt);
+        sleep(1200);
+      }
+    }
+    if (last != null) throw last;
+  }
+
+  private static void awaitSourceInstrumentControl(String type) {
+    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    while (System.currentTimeMillis() < deadline) {
+      for (SelenideElement candidate : $$(
+          "select[id*='security_name'], select[name*='security_name'], [role=combobox][id*='security_name']")) {
+        if (candidate.exists() && candidate.isDisplayed() && candidate.isEnabled()) return;
+      }
+      sleep(100);
+    }
+
+    List<String> inventory = new ArrayList<>();
+    for (SelenideElement candidate : $$("select, [role=combobox]")) {
+      if (!candidate.exists()) continue;
+      inventory.add(candidate.getTagName() + "#" + candidate.getAttribute("id")
+        + ":displayed=" + candidate.isDisplayed() + ":enabled=" + candidate.isEnabled());
+    }
+    throw new AssertionError("Disposable " + type
+      + " form did not expose a ready Source instrument control; observed=" + inventory);
+  }
+
   private static void assertOrRepairCompanyContext(String company) {
     SelenideElement selected = $("#navbarRepresentedDropdown").shouldBe(visible);
     if (normalized(selected.getText()).contains(normalized(company))) return;
