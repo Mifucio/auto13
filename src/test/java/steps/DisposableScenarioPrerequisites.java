@@ -17,17 +17,21 @@ import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
 /**
- * Makes disposable Corporate Actions scenarios independent from the execution
- * order of other Cucumber scenarios. The wrapper also waits for async form and
- * Dokobit controls that were proven to render after the primary page landmark.
+ * Makes disposable Corporate Actions scenarios independent from execution
+ * order. The wrapper waits for async form/Dokobit controls, verifies represented
+ * company identity, and routes create/save through the live-runtime repair
+ * helper without changing the observable customer workflow.
  */
 public final class DisposableScenarioPrerequisites {
   private static final String DEFAULT_COMPANY = "AutotestLtSingleSignee";
 
   private final DisposableDividendSteps flow;
+  private final DisposableExecutionRepairSteps repair;
 
-  public DisposableScenarioPrerequisites(DisposableDividendSteps flow) {
+  public DisposableScenarioPrerequisites(DisposableDividendSteps flow,
+                                         DisposableExecutionRepairSteps repair) {
     this.flow = flow;
+    this.repair = repair;
   }
 
   @Given("a fresh saved disposable {string} application exists")
@@ -36,24 +40,42 @@ public final class DisposableScenarioPrerequisites {
     selectAndVerifyCompany(DEFAULT_COMPANY);
     CustomerRepairSteps.ensureCustomerEnglish();
     flow.openCorporateActions();
-    flow.clickCreateApplication();
+    repair.openCreateApplicationSafely();
     flow.chooseLastApplicationType(type);
     flow.formVisible();
     awaitSourceInstrumentControl(type);
-    flow.fillDisposableApplicationAndSaveDraft(type);
+    repair.fillAndSafelySaveDraft(type);
     flow.signDocumentVisibleStep();
     flow.persistContract();
   }
 
   @And("I select and verify company {string} for the disposable application")
   public void selectAndVerifyCompany(String company) {
-    String current = url();
-    if (current != null && current.contains("/company-selection")) {
-      CustomerRepairSteps.selectRepresentedCompanyCardOnSelectionPage(company);
-    } else {
-      flow.selectCompany(company);
+    AssertionError last = null;
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      try {
+        String current = url();
+        if (current != null && current.contains("/company-selection")) {
+          CustomerRepairSteps.selectRepresentedCompanyCardOnSelectionPage(company);
+        } else {
+          flow.selectCompany(company);
+        }
+        assertOrRepairCompanyContext(company);
+        return;
+      } catch (AssertionError failure) {
+        last = failure;
+        String current = url();
+        // Cached customer auth was observed expiring exactly on a company-card
+        // click, bouncing to /login. Re-authenticate once and retry the same
+        // company rather than treating stale session state as a business fail.
+        if (attempt == 1 && current != null && current.contains("/login")) {
+          loginWithDokobitReadinessRetry();
+          continue;
+        }
+        throw failure;
+      }
     }
-    assertOrRepairCompanyContext(company);
+    throw last == null ? new AssertionError("Company selection failed without an observable cause") : last;
   }
 
   private void loginWithDokobitReadinessRetry() {
