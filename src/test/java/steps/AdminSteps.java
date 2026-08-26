@@ -1585,10 +1585,27 @@ public class AdminSteps {
   @Then("search_results_visible")
   public void search_results_visible() {
     assertPersonsRouteAndHeading();
-    $("input[type=search][name=search]").shouldBe(visible).shouldHave(value("test-value"));
+    $("input[type=search][name=search]").shouldBe(visible).shouldHave(value("Autotests"));
     uniqueObservedControl("Search").shouldBe(visible);
-    visibleManagementTable().shouldBe(visible);
-    $(byText("1 - 0 of 0")).shouldBe(visible);
+    SelenideElement table = visibleManagementTable().shouldBe(visible);
+    // Positive result required: the pager must report at least one hit
+    // (format "1 - N of M") and the table body must contain a matching row.
+    java.util.regex.Matcher m = java.util.regex.Pattern
+      .compile("1 - (\\d+) of (\\d+)").matcher($("body").getText());
+    if (!m.find()) {
+      throw new AssertionError("Expected result counter '1 - N of M' for a positive external user search");
+    }
+    int shown = Integer.parseInt(m.group(1));
+    int total = Integer.parseInt(m.group(2));
+    if (total < 1 || shown < 1) {
+      throw new AssertionError("Expected a positive search result for 'Autotests', got: 1 - "
+        + shown + " of " + total);
+    }
+    String tableText = table.getText().toLowerCase(java.util.Locale.ROOT);
+    if (!tableText.contains("autotest")) {
+      throw new AssertionError("Result rows do not mention 'autotest'; observed table text: "
+        + tableText.substring(0, Math.min(tableText.length(), 500)));
+    }
     CheckpointCapture.capture("search-external-user.admin-search-external-user.search-results-visible");
   }
 
