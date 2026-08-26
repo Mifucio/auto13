@@ -100,6 +100,16 @@ tasks.test {
     systemProperty("cucumber.filter.tags", filterTags)
     println("cucumber.filter.tags=$filterTags")
   }
+
+  // Allow a single live scenario to be rerun without executing every scenario
+  // sharing a broad requirement tag. This is especially important for mutating
+  // features that also contain signing and download flows.
+  val filterName = (System.getProperty("cucumber.filter.name")?.takeIf { it.isNotBlank() }
+    ?: providers.gradleProperty("cucumber.filter.name").orNull?.takeIf { it.isNotBlank() })
+  if (filterName != null) {
+    systemProperty("cucumber.filter.name", filterName)
+    println("cucumber.filter.name=$filterName")
+  }
 }
 
 // Used by the dual-runtime image build to materialize every test runtime jar

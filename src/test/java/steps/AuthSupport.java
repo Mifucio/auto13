@@ -25,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -333,7 +334,7 @@ public final class AuthSupport {
       : provider.contains("eparaksts") ? "eParaksts mobile"
       : provider.contains("audkenni") ? "Audkenni App"
       : providerName;
-    clickUniqueVisibleText(label);
+    clickUniqueVisibleIdentityProvider(label);
 
     SelenideElement phone = visibleField("input[name*=phone i], input[id*=phone i], input[autocomplete=tel], input[type=tel]");
     SelenideElement personalCode = visibleField("input[name*=code i], input[id*=code i], input[name*=person i], input[id*=person i]");
@@ -349,7 +350,7 @@ public final class AuthSupport {
     if (providerName == null || providerName.isBlank()) {
       throw new AssertionError("Dokobit provider is required");
     }
-    clickUniqueVisibleText(providerName);
+    clickUniqueVisibleIdentityProvider(providerName);
   }
 
   static void assertNasdaqLogoPopulated() {
@@ -603,6 +604,73 @@ public final class AuthSupport {
     throw new AssertionError("Observed identity provider '" + label + "' was not uniquely visible");
   }
 
+  /**
+   * Provider controls can match more than one selector in the login shell, and
+   * the old collection counted the same DOM node once per matching selector.
+   * Prefer the currently visible authentication dialog and deduplicate by the
+   * underlying WebElement before enforcing the exact-one contract.
+   */
+  private static void clickUniqueVisibleIdentityProvider(String label) {
+    long deadline = System.currentTimeMillis() + Configuration.timeout;
+    while (System.currentTimeMillis() < deadline) {
+      SelenideElement activeDialog = activeProviderDialog(label);
+      List<SelenideElement> scoped = visibleExactProviderCandidates(label, activeDialog);
+      String scope = activeDialog == null ? "page" : describeElement(activeDialog);
+      if (scoped.size() == 1) {
+        System.out.println("AUTH_PROVIDER_TARGET label=" + label + " scope=" + scope
+          + " candidate=" + describeElement(scoped.get(0)));
+        scoped.get(0).click();
+        return;
+      }
+      if (scoped.size() > 1) {
+        throw new AssertionError("Expected one observed identity provider '" + label + "' in active "
+          + "provider dialog, found " + scoped.size() + "; candidates=" + providerInventory(scoped));
+      }
+      sleep(100);
+    }
+    throw new AssertionError("Observed identity provider '" + label + "' was not uniquely visible in the active provider dialog");
+  }
+
+  private static SelenideElement activeProviderDialog(String label) {
+    SelenideElement active = null;
+    for (SelenideElement dialog : $$("[role=dialog], [aria-modal=true], ngb-modal-window, .modal, .cdk-overlay-pane")) {
+      if (!dialog.isDisplayed()) continue;
+      if (!visibleExactProviderCandidates(label, dialog).isEmpty()) active = dialog;
+    }
+    return active;
+  }
+
+  private static List<SelenideElement> visibleExactProviderCandidates(String label, SelenideElement scope) {
+    String selector = "button, a, [role=button], label, .authentication-method, .login-method";
+    ElementsCollection candidates = scope == null ? $$(selector) : scope.$$(selector);
+    Map<WebElement, SelenideElement> unique = new LinkedHashMap<>();
+    for (SelenideElement candidate : candidates) {
+      if (candidate.isDisplayed() && candidate.isEnabled() && label.equalsIgnoreCase(candidate.getText().trim())) {
+        unique.put(candidate.getWrappedElement(), candidate);
+      }
+    }
+    return new ArrayList<>(unique.values());
+  }
+
+  private static String providerInventory(List<SelenideElement> candidates) {
+    return candidates.stream().map(AuthSupport::describeElement).collect(Collectors.joining(" | "));
+  }
+
+  private static String describeElement(SelenideElement element) {
+    try {
+      String tag = element.getTagName();
+      String id = element.getAttribute("id");
+      String classes = element.getAttribute("class");
+      String parent = executeJavaScript(
+        "const e=arguments[0],p=e&&e.parentElement;return p?p.tagName+'.'+String(p.className||'').replace(/\\s+/g,'.'):'';",
+        element.getWrappedElement());
+      return tag + "#" + (id == null ? "" : id) + "." + (classes == null ? "" : classes.replaceAll("\\s+", "."))
+        + " parent=" + (parent == null ? "" : parent);
+    } catch (Throwable ignored) {
+      return "<unavailable>";
+    }
+  }
+
   private static boolean isHttpUrl(String value) {
     return value != null && (value.startsWith("https://") || value.startsWith("http://"));
   }
@@ -825,9 +893,29 @@ public final class AuthSupport {
   }
 
   static void awaitAuthenticatedCustomer() {
-    long deadline = System.currentTimeMillis() + Configuration.timeout;
+    awaitAuthenticatedCustomer(null);
+  }
+
+  /**
+   * Waits for the customer shell, optionally requiring a specific customer
+   * route. Disposable application recovery must not treat an authenticated
+   * but unrelated page as ready: that leaves the chooser recovery polling a
+   * stale surface indefinitely. If the shell is authenticated on another
+   * customer route, navigate once to the requested route and then either
+   * observe it or fail with the rendered diagnostics.
+   */
+  static void awaitAuthenticatedCustomer(String expectedPath) {
+    awaitAuthenticatedCustomer(expectedPath, null);
+  }
+
+  static void awaitAuthenticatedCustomer(String expectedPath, String expectedCompany) {
+    long waitBudget = expectedPath == null
+      ? Configuration.timeout
+      : Math.min(Configuration.timeout, 20000);
+    long deadline = System.currentTimeMillis() + waitBudget;
     String lastUrl = WebDriverRunner.url();
     String lastText = "";
+    boolean redirectedToExpectedPath = false;
     while (System.currentTimeMillis() < deadline) {
       lastUrl = WebDriverRunner.url();
       try {
@@ -839,28 +927,196 @@ public final class AuthSupport {
       // If Okta SSO redirected to the admin origin (eservicesdevint) instead
       // of the customer page, navigate back and retry login.
       if (lastUrl != null && ADMIN_BASE_URL != null && sameOrigin(lastUrl, ADMIN_BASE_URL)) {
-        System.out.println("  🔀 Okta SSO landed on admin origin, re-doing customer login...");
-        open(BASE_URL + "/login");
-        manualLogin();
-        deadline = System.currentTimeMillis() + Configuration.timeout;
+        if (expectedPath != null) {
+          System.out.println("AUTH_CUSTOMER_CONTEXT_WRONG_ORIGIN expected=" + expectedPath + " url=" + lastUrl);
+          open(BASE_URL + "/login");
+        } else {
+          System.out.println("  🔀 Okta SSO landed on admin origin, re-doing customer login...");
+          open(BASE_URL + "/login");
+          manualLogin();
+          deadline = System.currentTimeMillis() + Configuration.timeout;
+        }
         continue;
       }
       boolean leftLogin = lastUrl != null && sameOrigin(lastUrl, BASE_URL) && !lastUrl.contains("/login");
       // Company-selection page: language varies by user profile locale (English
       // "Choose who you represent", Estonian "Esindatav isik/äriühing", etc.).
       // Accept any /company-selection URL that has rendered company cards.
-      boolean companySelectionReady = leftLogin && lastUrl.contains("/company-selection")
-        && (normalized.contains("choose who you represent")
-            || normalized.contains("esindatav")
-            || $$("a.stretched-link").stream().anyMatch(SelenideElement::isDisplayed));
+      boolean companySelectionReady = leftLogin && lastUrl.contains("/company-selection");
+      boolean expectedRouteReady = expectedPath != null && leftLogin
+        && customerPathMatches(lastUrl, expectedPath)
+        && $("main, [role=main]").isDisplayed()
+        && representedCompanyReady(expectedCompany)
+        && !normalized.contains("loading");
       boolean shellReady = $("main, [role=main]").isDisplayed()
         && !normalized.contains("loading")
         && (normalized.contains("home") || normalized.contains("company") || normalized.contains("application"));
-      if (companySelectionReady || (leftLogin && shellReady)) return;
+      if (companySelectionReady) {
+        if (expectedPath == null || expectedCompany == null || expectedCompany.isBlank()) return;
+        if (tryDirectCustomerRoute(expectedPath, expectedCompany, deadline)) {
+          System.out.println("AUTH_CUSTOMER_DIRECT_ROUTE_READY company=" + expectedCompany
+            + " url=" + WebDriverRunner.url());
+          return;
+        }
+        selectExpectedCompanyCard(expectedCompany);
+        System.out.println("AUTH_CUSTOMER_COMPANY_SELECTED company=" + expectedCompany);
+        open(expectedPath);
+        redirectedToExpectedPath = true;
+        continue;
+      }
+      if (expectedRouteReady || (expectedPath == null && leftLogin && shellReady)) return;
+
+      if (expectedPath != null && leftLogin && !redirectedToExpectedPath
+          && $("#navbarRepresentedDropdown").isDisplayed()) {
+        System.out.println("AUTH_CUSTOMER_CONTEXT_REDIRECT expected=" + expectedPath + " from=" + lastUrl);
+        open(expectedPath);
+        redirectedToExpectedPath = true;
+        continue;
+      }
       sleep(250);
     }
-    throw new AssertionError("Customer authentication did not render an authenticated application shell. url="
+    String expected = expectedPath == null ? "authenticated customer application shell"
+      : "customer context " + expectedPath;
+    throw new AssertionError("Customer authentication did not reach expected " + expected + ". url="
       + lastUrl + " visibleText=" + (lastText == null ? "" : lastText.substring(0, Math.min(lastText.length(), 1200))));
+  }
+
+  /**
+   * A valid customer session can occasionally land on a blank company-selection
+   * route while its SPA shell is still unusable. Try the requested customer
+   * route once before treating that state as a failed login. The represented
+   * company is still required through the visible navbar dropdown; a blank or
+   * unrelated shell never counts as ready.
+   */
+  private static boolean tryDirectCustomerRoute(String expectedPath, String expectedCompany, long outerDeadline) {
+    long fallbackDeadline = Math.min(outerDeadline, System.currentTimeMillis() + 5000);
+    System.out.println("AUTH_CUSTOMER_DIRECT_ROUTE_FALLBACK expected=" + expectedPath
+      + " company=" + expectedCompany + " from=" + WebDriverRunner.url());
+    open(BASE_URL + expectedPath);
+    while (System.currentTimeMillis() < fallbackDeadline) {
+      String current = WebDriverRunner.url();
+      if (current == null || current.contains("/login")) return false;
+      if (current.contains("/company-selection")) return false;
+      if (customerPathMatches(current, expectedPath)
+          && $("main, [role=main]").isDisplayed()) {
+        SelenideElement represented = $("#navbarRepresentedDropdown");
+        if (!represented.isDisplayed()) {
+          sleep(100);
+          continue;
+        }
+        String selected = represented.getText() == null ? "" : represented.getText();
+        if (normalizedCompanyText(selected).equals(normalizedCompanyText(expectedCompany))) return true;
+
+        represented.shouldBe(visible).shouldBe(enabled).click();
+        Map<WebElement, SelenideElement> unique = new LinkedHashMap<>();
+        for (SelenideElement candidate : $("body").$$(
+            "a, button, [role=menuitem], [role=option], [role=button]")) {
+          if (!candidate.isDisplayed() || !candidate.isEnabled()) continue;
+          String label = candidate.getText() == null ? "" : candidate.getText();
+          if (normalizedCompanyText(label).equals(normalizedCompanyText(expectedCompany))) {
+            unique.put(candidate.getWrappedElement(), candidate);
+          }
+        }
+        if (unique.size() != 1) {
+          throw new AssertionError("Expected exactly one represented-company dropdown option '"
+            + expectedCompany + "', found " + unique.size());
+        }
+        unique.values().iterator().next().click();
+        long selectionDeadline = Math.min(fallbackDeadline + 3000, outerDeadline);
+        while (System.currentTimeMillis() < selectionDeadline) {
+          SelenideElement refreshed = $("#navbarRepresentedDropdown");
+          if (refreshed.isDisplayed() && normalizedCompanyText(refreshed.getText())
+              .equals(normalizedCompanyText(expectedCompany))) return true;
+          sleep(100);
+        }
+        return false;
+      }
+      sleep(100);
+    }
+    return false;
+  }
+
+  private static String normalizedCompanyText(String value) {
+    return value == null ? "" : value.replace('\u00a0', ' ').replaceAll("\\s+", " ")
+      .trim().toLowerCase(java.util.Locale.ROOT);
+  }
+
+  private static boolean representedCompanyReady(String expectedCompany) {
+    if (expectedCompany == null || expectedCompany.isBlank()) return true;
+    try {
+      SelenideElement represented = $("#navbarRepresentedDropdown");
+      return represented.isDisplayed()
+        && normalizedCompanyText(represented.getText()).equals(normalizedCompanyText(expectedCompany));
+    } catch (Throwable ignored) {
+      return false;
+    }
+  }
+
+  private static boolean customerPathMatches(String currentUrl, String expectedPath) {
+    if (currentUrl == null || expectedPath == null || expectedPath.isBlank()) return false;
+    try {
+      String path = java.net.URI.create(currentUrl).getPath();
+      String expected = expectedPath.startsWith("/") ? expectedPath : "/" + expectedPath;
+      return path.equals(expected) || path.startsWith(expected + "/");
+    } catch (IllegalArgumentException ignored) {
+      return false;
+    }
+  }
+
+  private static void selectExpectedCompanyCard(String company) {
+    long cardStartedAt = System.currentTimeMillis();
+    long cardDeadline = cardStartedAt + Math.min(Configuration.timeout, 20000);
+    long refreshAt = cardStartedAt + Math.min(10000, Math.max(1000, Configuration.timeout / 2));
+    boolean refreshed = false;
+    int observedMatches = 0;
+    while (System.currentTimeMillis() < cardDeadline) {
+      Number matches = executeJavaScript(
+        "const wanted=String(arguments[0]).toLowerCase();"
+          + "const links=[...document.querySelectorAll('a.stretched-link')].filter(a=>{"
+          + " const card=a.parentElement;"
+          + " const text=(card?.innerText||'').replace(/\\s+/g,' ').trim().toLowerCase();"
+          + " return !!card && card.getClientRects().length>0 && text.includes(wanted);"
+          + "});"
+          + "if(links.length===1) links[0].click(); return links.length;",
+        company.toLowerCase(java.util.Locale.ROOT));
+      observedMatches = matches == null ? 0 : matches.intValue();
+      if (observedMatches == 1) {
+        while (System.currentTimeMillis() < cardDeadline) {
+          String next = WebDriverRunner.url();
+          if (next != null && !next.contains("/company-selection") && !next.contains("/login")) return;
+          sleep(100);
+        }
+        break;
+      }
+      if (!refreshed && System.currentTimeMillis() >= refreshAt) {
+        System.out.println("AUTH_CUSTOMER_COMPANY_REFRESH company=" + company + " url=" + WebDriverRunner.url());
+        refresh();
+        // A stale SPA navigation can leave the browser on the route with only
+        // the shell background rendered. Reopen the same authenticated route
+        // once so Angular performs a fresh route bootstrap, while retaining
+        // the independent bounded card deadline.
+        open(BASE_URL + "/company-selection");
+        refreshed = true;
+      }
+      sleep(100);
+    }
+    String observed = "";
+    String body = "";
+    try {
+      observed = String.valueOf(executeJavaScript(
+        "return [...document.querySelectorAll('a.stretched-link')].map(a=>(a.parentElement?.innerText||'')"
+          + ".replace(/\\s+/g,' ').trim()).filter(Boolean).join(' | ');"));
+      body = $("body").getText();
+    } catch (Throwable ignored) { }
+    String screenshotPath = "unavailable";
+    try {
+      String captured = screenshot("customer-company-selection-recovery");
+      if (captured != null) screenshotPath = captured;
+    } catch (Throwable ignored) { }
+    throw new AssertionError("Expected exactly one represented-company card '" + company
+      + "' during bounded auth recovery, found " + observedMatches + "; observed=" + observed
+      + "; url=" + WebDriverRunner.url() + "; body="
+      + body.substring(0, Math.min(body.length(), 1200)) + "; screenshot=" + screenshotPath);
   }
 
   static void clickByText(String label) {

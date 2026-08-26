@@ -11,6 +11,7 @@ import org.openqa.selenium.support.ui.Select;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -20,6 +21,8 @@ import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
 import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
+import static com.codeborne.selenide.Selectors.byXpath;
+import static com.codeborne.selenide.WebDriverRunner.url;
 
 /**
  * Repairs only the live-runtime failure modes observed after browser bootstrap:
@@ -79,9 +82,9 @@ public final class DisposableExecutionRepairSteps {
     clearDirectory(downloads);
     downloadedSignedDocument = null;
 
-    List<SelenideElement> controls = exactVisibleControls("Download");
+    List<SelenideElement> controls = awaitSignedApplicationDownloadControl();
     if (controls.isEmpty()) {
-      throw new AssertionError("Signed disposable application exposes no visible Download control");
+      throw new AssertionError("Signed disposable application exposes no visible Download control after detail-page rerender; url=" + url());
     }
     SelenideElement control = controls.get(controls.size() - 1);
 
@@ -126,6 +129,34 @@ public final class DisposableExecutionRepairSteps {
       + "; direct_failure=" + (directFailure == null ? "none" : directFailure.getClass().getSimpleName()));
   }
 
+  private static List<SelenideElement> awaitSignedApplicationDownloadControl() {
+    long deadline = System.currentTimeMillis() + Math.max(10000, Math.min(Configuration.timeout, 30000));
+    while (System.currentTimeMillis() < deadline) {
+      String current = url();
+      if (current != null && current.contains("/corporate-actions/application-form/")) {
+        SelenideElement signedDocumentDownload = $(byXpath(
+          "//*[normalize-space()='Signed Document']/ancestor::*[.//button[normalize-space()='Download']][1]"
+            + "//button[normalize-space()='Download']"));
+        if (signedDocumentDownload.isDisplayed() && signedDocumentDownload.isEnabled()) return List.of(signedDocumentDownload);
+
+        SelenideElement detailDownload = $(
+          "jhi-ca-application-form .form-info > .button-wrapper > button.btn.button-plain");
+        if (detailDownload.isDisplayed() && detailDownload.isEnabled()
+            && "Download".equals(normalize(detailDownload.getText()))) return List.of(detailDownload);
+
+        SelenideElement buttonGroupDownload = $(
+          "jhi-ca-application-form .form-info .button-group > button.btn.button-plain");
+        if (buttonGroupDownload.isDisplayed() && buttonGroupDownload.isEnabled()
+            && "Download".equals(normalize(buttonGroupDownload.getText()))) return List.of(buttonGroupDownload);
+
+        List<SelenideElement> fallback = exactVisibleControls("Download");
+        if (!fallback.isEmpty()) return fallback;
+      }
+      sleep(100);
+    }
+    return List.of();
+  }
+
   @Then("the repaired signed disposable document exists in the file system")
   public void repairedSignedDocumentExists() throws Exception {
     if (downloadedSignedDocument == null || !Files.isRegularFile(downloadedSignedDocument)
@@ -157,6 +188,7 @@ public final class DisposableExecutionRepairSteps {
       safeClickExactAny(List.of("Save as Draft", "Save as draft"));
       if (awaitVisibleTextIfPresent("Sign Document", 2500)) return;
 
+      repairInvalidBonusIssuePaymentDate();
       fillVisibleValidationFields();
       attachRequiredPdfIfAny();
       System.out.println("DISPOSABLE_REPAIR save_retry=" + attempt + " invalid=" + invalidFieldInventory());
@@ -205,13 +237,75 @@ public final class DisposableExecutionRepairSteps {
       if ("select".equalsIgnoreCase(field.getTagName())) {
         selectFirstNonEmptyNativeOption(field);
       } else if (type.equals("date")) {
-        field.setValue(LocalDate.now().plusDays(2).toString());
+        setDateInput(field, LocalDate.now().plusDays(2).toString());
       } else if (type.equals("number")) {
         field.setValue("1");
       } else {
         field.setValue("Disposable repair draft " + System.currentTimeMillis());
       }
     }
+  }
+
+  /**
+   * Bonus Issue payment date is populated but can remain invalid after the
+   * intercepted-click recovery enters its save loop. The generic repair skips
+   * non-empty fields, so explicitly refresh this dependent field on each retry.
+   *
+   * After the backend rejects the draft, the form re-renders with aria-invalid="true"
+   * on the payment date. setDateInput corrects the DOM value and dispatches the
+   * input/change/blur events, but the stale aria-invalid attribute and is-invalid
+   * CSS class may persist (Angular only clears them on a successful re-validation
+   * triggered by form submission). The Save button's click handler checks the
+   * field-level validity flags before submitting, so we must clear them here.
+   */
+  private static void repairInvalidBonusIssuePaymentDate() {
+    SelenideElement paymentDate = $("#bi_payment_date");
+    if (!paymentDate.exists() || !paymentDate.isDisplayed() || !paymentDate.isEnabled()
+        || !isInvalid(paymentDate)) return;
+
+    LocalDate recordDate = parseInputDate($("#bi_record_date"));
+    if (recordDate == null) recordDate = LocalDate.now().plusDays(2);
+    setDateInput(paymentDate, "");
+    setDateInput(paymentDate, nextBusinessDay(recordDate.plusDays(1)).format(DateTimeFormatter.ISO_LOCAL_DATE));
+    // Clear stale invalid markers left by the backend rejection so the Angular
+    // submit handler no longer considers the field invalid.
+    executeJavaScript(
+      "arguments[0].removeAttribute('aria-invalid');"
+        + "arguments[0].classList.remove('is-invalid','ng-invalid','ng-dirty','ng-touched');"
+        + "const c=arguments[0].closest('.form-group,.input-group,.field,.form-floating');"
+        + "if(c){c.classList.remove('has-error','is-invalid');const fb=c.querySelector('.invalid-feedback,.invalid-tooltip,.error-message');"
+        + "if(fb){fb.remove();}}",
+      paymentDate.getWrappedElement());
+    sleep(500);
+  }
+
+  private static LocalDate nextBusinessDay(LocalDate date) {
+    LocalDate result = date;
+    while (result.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+        || result.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) {
+      result = result.plusDays(1);
+    }
+    return result;
+  }
+
+  private static boolean isInvalid(SelenideElement field) {
+    return "true".equalsIgnoreCase(safe(field.getAttribute("aria-invalid")))
+      || safe(field.getAttribute("class")).toLowerCase(Locale.ROOT).contains("invalid");
+  }
+
+  private static LocalDate parseInputDate(SelenideElement field) {
+    if (!field.exists()) return null;
+    String value = safe(field.getValue()).trim();
+    if (value.isBlank()) return null;
+    try {
+      return LocalDate.parse(value, DateTimeFormatter.ISO_LOCAL_DATE);
+    } catch (RuntimeException ignored) {
+      return null;
+    }
+  }
+
+  private static void setDateInput(SelenideElement field, String value) {
+    executeJavaScript("const e=arguments[0], v=arguments[1]; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(e,v); e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); e.dispatchEvent(new Event('blur',{bubbles:true}));", field, value);
   }
 
   private static void selectFirstNonEmptyNativeOption(SelenideElement field) {

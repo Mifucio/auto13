@@ -31,10 +31,14 @@ final class NetworkBusinessWaitRepair {
         && (lastDataActivityAt == 0 || now - lastDataActivityAt >= NETWORK_QUIET_MS);
       if (quiet) return;
 
-      if (now - startedAt >= Math.min(EXTERNAL_TIMEOUT_MS, HANG_TIMEOUT_MS)) {
+      // EXTERNAL_TIMEOUT_MS is the performance budget reported for slow data.
+      // Treating that lower budget as the hang deadline made healthy but busy
+      // live environments fail after 15 seconds even though the configured
+      // hang guard is 45 seconds.
+      if (now - startedAt >= HANG_TIMEOUT_MS) {
         String pendingUrls = PENDING_DATA_REQUESTS.values().stream()
           .map(request -> request.url).distinct().collect(Collectors.joining(", "));
-        throw new AssertionError("HANG_DETECTED external business data exceeded " + EXTERNAL_TIMEOUT_MS
+        throw new AssertionError("HANG_DETECTED external business data exceeded " + HANG_TIMEOUT_MS
           + "ms; pending URLs: " + pendingUrls);
       }
 

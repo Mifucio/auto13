@@ -8,7 +8,7 @@ Feature: "Open User Settings, make and save changes"
     Given I navigate to "/login"
     And I am on the application
     And I submit the observed form
-    And I select the represented company card "ICELANDIC COMPANY NES-52 0000000001"
+    And I select the represented company card "AutotestLtSingleSignee"
     And I ensure customer application language is English
     When I open the observed user settings editor without saving
     Then settings_change_round_trip_saved_without_net_change

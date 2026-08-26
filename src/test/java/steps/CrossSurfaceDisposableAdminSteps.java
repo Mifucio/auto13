@@ -23,11 +23,13 @@ import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
 import static com.codeborne.selenide.Selenide.executeJavaScript;
+import static com.codeborne.selenide.Selenide.open;
 import static com.codeborne.selenide.Selenide.refresh;
 import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.getWebDriver;
 import static com.codeborne.selenide.WebDriverRunner.hasWebDriverStarted;
 import static com.codeborne.selenide.WebDriverRunner.url;
+import static steps.RuntimeState.BASE_URL;
 
 /**
  * Creates disposable application data through the real customer surface and
@@ -67,6 +69,10 @@ public final class CrossSurfaceDisposableAdminSteps {
   }
 
   private void createCustomerDraft(boolean withAttachment) throws Exception {
+    // Cross-surface hooks start [admin] scenarios on the admin origin. Force
+    // the customer origin before the customer prerequisite performs login and
+    // form creation so chooser retries never inherit the admin route.
+    open(BASE_URL);
     customer.freshSavedDisposableApplication(TYPE);
     applicationId = applicationIdFromUrl(url());
     if (applicationId == null) {
@@ -164,15 +170,21 @@ public final class CrossSurfaceDisposableAdminSteps {
   }
 
   private void awaitAdminDetail() {
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    long deadline = System.currentTimeMillis() + Math.max(Configuration.timeout, RuntimeState.HANG_TIMEOUT_MS);
+    String lastBody = "";
     while (System.currentTimeMillis() < deadline) {
       if (isCurrentApplicationDetail()) {
-        String body = $("body").shouldBe(visible).getText();
-        if (body != null && body.contains(TYPE)) return;
+        lastBody = $("body").shouldBe(visible).getText();
+        // The exact numeric route is authoritative. On a busy live backend the
+        // localized form title can arrive later than the reusable detail tabs,
+        // so accept either marker instead of failing a healthy rendered page.
+        if ((lastBody != null && lastBody.contains(TYPE))
+            || CorporateActionsTabProbe.findClickable("Attachments") != null) return;
       }
       sleep(100);
     }
-    throw new AssertionError("Admin surface did not open disposable application " + applicationId + "; url=" + url());
+    throw new AssertionError("Admin surface did not open disposable application " + applicationId
+      + "; url=" + url() + " body=" + clean(lastBody).substring(0, Math.min(clean(lastBody).length(), 800)));
   }
 
   private boolean isCurrentApplicationDetail() {

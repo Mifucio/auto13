@@ -1,10 +1,10 @@
 @req:CA-25
-@cross_surface_disposable_admin
+@submitted_disposable_admin
 Feature: "Initiate signature process, view signees"
-  Requirement CA-25 is exercised on one disposable customer-created application opened in admin.
+  Requirement CA-25 initiates/signs one disposable customer application, then verifies its signees in admin.
 
   @req:CA-25
   Scenario: [admin] "Initiate signature process, view signees"
-    Given a fresh disposable customer Bonus Issue draft is opened in the admin application
-    When I initiate signing and open the disposable signees surface
-    Then the disposable signees surface is visible
+    Given a fresh submitted disposable customer Bonus Issue application is opened in the admin application
+    When I open the current admin application "Signatures" tab
+    Then the admin signees list is visible
