@@ -17,6 +17,7 @@ import java.util.Locale;
 
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
+import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
 
 /** Uses a PDF fixture accepted by the live attachment input. */
@@ -83,7 +84,10 @@ public final class SupportedAttachmentRepairSteps {
         // Rerendering can stale the first control. Re-resolve once by filename.
         SelenideElement fresh = attachmentDownloadControl();
         try { returned = fresh.download(); }
-        catch (Throwable ignored) { try { fresh.click(); } catch (Throwable ignoredAgain) { } }
+        catch (Throwable ignored) {
+          try { executeJavaScript("arguments[0].click();", fresh.getWrappedElement()); }
+          catch (Throwable ignoredAgain) { }
+        }
       }
       if (returned != null && returned.isFile() && returned.length() > 0) {
         downloaded = returned.toPath().toAbsolutePath().normalize();
@@ -149,8 +153,20 @@ public final class SupportedAttachmentRepairSteps {
   }
 
   private SelenideElement attachmentDownloadControl() {
-    List<SelenideElement> containers = new ArrayList<>();
     String expected = canonicalFileToken(attachmentName);
+
+    // The live Angular view renders the uploaded filename as the actionable
+    // attachment link, but intentionally omits href. Searching broad ancestor
+    // divs first can therefore select the unrelated application-level Download
+    // button. Resolve the exact filename link before considering row controls.
+    for (SelenideElement link : $("body").$$("a")) {
+      try {
+        if (link.isDisplayed() && link.isEnabled()
+            && canonicalFileToken(link.getText()).equals(expected)) return link;
+      } catch (Throwable ignored) { }
+    }
+
+    List<SelenideElement> containers = new ArrayList<>();
     for (SelenideElement candidate : $$("tr,li,.card,.row,div")) {
       try {
         if (!candidate.isDisplayed()) continue;

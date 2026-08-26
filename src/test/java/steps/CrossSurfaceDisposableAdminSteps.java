@@ -23,11 +23,13 @@ import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
 import static com.codeborne.selenide.Selenide.executeJavaScript;
+import static com.codeborne.selenide.Selenide.open;
 import static com.codeborne.selenide.Selenide.refresh;
 import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.getWebDriver;
 import static com.codeborne.selenide.WebDriverRunner.hasWebDriverStarted;
 import static com.codeborne.selenide.WebDriverRunner.url;
+import static steps.RuntimeState.BASE_URL;
 
 /**
  * Creates disposable application data through the real customer surface and
@@ -67,6 +69,10 @@ public final class CrossSurfaceDisposableAdminSteps {
   }
 
   private void createCustomerDraft(boolean withAttachment) throws Exception {
+    // Cross-surface hooks start [admin] scenarios on the admin origin. Force
+    // the customer origin before the customer prerequisite performs login and
+    // form creation so chooser retries never inherit the admin route.
+    open(BASE_URL);
     customer.freshSavedDisposableApplication(TYPE);
     applicationId = applicationIdFromUrl(url());
     if (applicationId == null) {

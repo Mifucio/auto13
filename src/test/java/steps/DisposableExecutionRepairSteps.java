@@ -21,6 +21,8 @@ import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
 import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
+import static com.codeborne.selenide.Selectors.byXpath;
+import static com.codeborne.selenide.WebDriverRunner.url;
 
 /**
  * Repairs only the live-runtime failure modes observed after browser bootstrap:
@@ -80,9 +82,9 @@ public final class DisposableExecutionRepairSteps {
     clearDirectory(downloads);
     downloadedSignedDocument = null;
 
-    List<SelenideElement> controls = exactVisibleControls("Download");
+    List<SelenideElement> controls = awaitSignedApplicationDownloadControl();
     if (controls.isEmpty()) {
-      throw new AssertionError("Signed disposable application exposes no visible Download control");
+      throw new AssertionError("Signed disposable application exposes no visible Download control after detail-page rerender; url=" + url());
     }
     SelenideElement control = controls.get(controls.size() - 1);
 
@@ -125,6 +127,34 @@ public final class DisposableExecutionRepairSteps {
 
     throw new AssertionError("Observed signed-document Download produced no non-empty artifact in " + downloads
       + "; direct_failure=" + (directFailure == null ? "none" : directFailure.getClass().getSimpleName()));
+  }
+
+  private static List<SelenideElement> awaitSignedApplicationDownloadControl() {
+    long deadline = System.currentTimeMillis() + Math.max(10000, Math.min(Configuration.timeout, 30000));
+    while (System.currentTimeMillis() < deadline) {
+      String current = url();
+      if (current != null && current.contains("/corporate-actions/application-form/")) {
+        SelenideElement signedDocumentDownload = $(byXpath(
+          "//*[normalize-space()='Signed Document']/ancestor::*[.//button[normalize-space()='Download']][1]"
+            + "//button[normalize-space()='Download']"));
+        if (signedDocumentDownload.isDisplayed() && signedDocumentDownload.isEnabled()) return List.of(signedDocumentDownload);
+
+        SelenideElement detailDownload = $(
+          "jhi-ca-application-form .form-info > .button-wrapper > button.btn.button-plain");
+        if (detailDownload.isDisplayed() && detailDownload.isEnabled()
+            && "Download".equals(normalize(detailDownload.getText()))) return List.of(detailDownload);
+
+        SelenideElement buttonGroupDownload = $(
+          "jhi-ca-application-form .form-info .button-group > button.btn.button-plain");
+        if (buttonGroupDownload.isDisplayed() && buttonGroupDownload.isEnabled()
+            && "Download".equals(normalize(buttonGroupDownload.getText()))) return List.of(buttonGroupDownload);
+
+        List<SelenideElement> fallback = exactVisibleControls("Download");
+        if (!fallback.isEmpty()) return fallback;
+      }
+      sleep(100);
+    }
+    return List.of();
   }
 
   @Then("the repaired signed disposable document exists in the file system")
