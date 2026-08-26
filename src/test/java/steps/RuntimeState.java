@@ -190,11 +190,20 @@ public final class RuntimeState {
         // PEM: подходит для Linux/NSS (файлы уже в базе) и как подсказка.
         System.out.println("  🔐 Client certificate (PEM): " + clientCert);
       } else if (clientCertPassword != null && !clientCertPassword.isEmpty()) {
-        // PFX/P12: JVM keyStore для Java-клиентов (Chrome сам берёт из ОС/NSS).
-        System.setProperty("javax.net.ssl.keyStore", clientCert);
-        System.setProperty("javax.net.ssl.keyStorePassword", clientCertPassword);
-        System.setProperty("javax.net.ssl.keyStoreType", "PKCS12");
-        System.out.println("  🔐 Client certificate (PFX): " + clientCert);
+        // PFX/P12: JVM keyStore для Java-клиентов (браузер берёт из ОС/NSS).
+        // Only wire the JVM default keystore when the file actually exists on
+        // this machine: SSLContext.getDefault() eagerly loads the store, so a
+        // stale Windows path on Linux/WSL would crash every HttpClient with
+        // KeyManagementException before any test step runs.
+        if (java.nio.file.Files.isRegularFile(java.nio.file.Path.of(clientCert))) {
+          System.setProperty("javax.net.ssl.keyStore", clientCert);
+          System.setProperty("javax.net.ssl.keyStorePassword", clientCertPassword);
+          System.setProperty("javax.net.ssl.keyStoreType", "PKCS12");
+          System.out.println("  🔐 Client certificate (PFX): " + clientCert);
+        } else {
+          System.out.println("  ⚠️ Client certificate (PFX) not found on this machine, skipping JVM keystore: "
+            + clientCert + " — set CLIENT_CERT_PATH to a valid PKCS#12 file for mTLS.");
+        }
       } else {
         // PKCS#11 / system store
         chromeOptions.addArguments("--enable-features=PlatformPKCS11");
