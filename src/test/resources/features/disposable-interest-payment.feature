@@ -7,7 +7,7 @@ Feature: Create, sign and review the disposable Interest Payment application
     And I ensure customer application language is English
     When I open Corporate Actions from the customer menu
     And I click Create Application
-    And I choose the last "Interest Payment" application type
+    And I choose the observed "Interest Payment" application type
     Then the Application data form must be visible
     When I fill and safely save the disposable "Interest Payment" form as draft
     Then the Sign Document button must be visible

@@ -75,11 +75,9 @@ public class StepDefinitions {
 
   @AfterStep
   public void afterStep(Scenario scenario) {
-    // The translation bootstrap endpoint is UI background work, not business
-    // data. The live run proved it can remain pending >15s while the page is
-    // already usable, so it must not trigger the business-data hang gate.
-    NetworkNoisePolicy.discardNonBlockingBackgroundRequests();
-    waitForExternalData();
+    // Preserve business-data waiting, but discard live-proven background work
+    // that belongs to the previous admin list route after a detail transition.
+    NetworkBusinessWaitRepair.waitForBusinessData();
     long durationMs = System.currentTimeMillis() - stepStartedAt;
     boolean slow = durationMs > SLOW_STEP_MS;
     PERFORMANCE_RESULTS.add("{\"type\":\"step\",\"name\":\"" + jsonEscape(currentStep) + "\",\"durationMs\":" + durationMs + ",\"slow\":" + slow + "}");
