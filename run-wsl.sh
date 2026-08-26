@@ -52,6 +52,9 @@ DISPLAY="${DISPLAY:-:0}"
 
 cd "$PROJECT"
 # cleanTest forces the test task to actually run instead of being UP-TO-DATE.
-exec sh ./gradlew --no-daemon cleanTest test \
+# Daemon keeps a warm JVM between runs (~10-20s saved); pass NO_DAEMON=1 to opt out.
+DAEMON_FLAG="--no-daemon"
+if [ "${NO_DAEMON:-0}" != "1" ]; then DAEMON_FLAG=""; fi
+exec sh ./gradlew $DAEMON_FLAG cleanTest test \
   -PmaxParallelForks=1 \
   "-Pcucumber.filter.tags=$TAGS"

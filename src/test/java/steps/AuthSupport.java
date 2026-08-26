@@ -354,8 +354,10 @@ public final class AuthSupport {
   }
 
   static void assertNasdaqLogoPopulated() {
-    $("body").shouldHave(text("NASDAQ CSD eServices"));
-    if ($("body").getText().contains("Nasdaq")) return;
+    String initialBodyText = $("body").shouldHave(text("NASDAQ CSD eServices")).getText();
+    // Case-insensitive: the brand renders as "NASDAQ"/"Nasdaq" depending on locale
+    // assets; skipping the expensive DOM-wide fallback scan saves seconds.
+    if (initialBodyText.toLowerCase(java.util.Locale.ROOT).contains("nasdaq")) return;
     for (SelenideElement candidate : $$("img, svg, [class*=logo i], [data-testid*=logo i]")) {
       if (!candidate.isDisplayed()) continue;
       String source = candidate.getAttribute("src");
