@@ -8,5 +8,5 @@ Feature: "Choose which company to represent"
     Given I navigate to "/login"
     And I am on the application
     And I submit the observed form
-    When I select the represented company card "AutotestLtSingleSignee"
+    When I select the represented company card "ICELANDIC COMPANY NES-52 0000000001"
     Then company_context_applied
