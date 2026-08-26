@@ -51,6 +51,7 @@ TAGS="${1:?usage: ./run-wsl.sh \"<cucumber tag expression>\"}"
 DISPLAY="${DISPLAY:-:0}"
 
 cd "$PROJECT"
-exec sh ./gradlew --no-daemon test \
+# cleanTest forces the test task to actually run instead of being UP-TO-DATE.
+exec sh ./gradlew --no-daemon cleanTest test \
   -PmaxParallelForks=1 \
   "-Pcucumber.filter.tags=$TAGS"
