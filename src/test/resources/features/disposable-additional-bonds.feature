@@ -12,6 +12,7 @@ Feature: Create, sign and review the disposable Additional issuance of Bonds app
     When I fill and safely save the disposable Additional issuance of Bonds form on the Both paid-up branch
     Then the Sign Document button must be visible
     And I persist the disposable application ID and remembered source instrument
+    And I remember this disposable "Additional issuance of Bonds" draft for read-only scenarios
 
   Scenario: Sign a disposable Additional issuance of Bonds application and download the signed document
     Given a fresh saved disposable "Additional issuance of Bonds" application exists
@@ -26,11 +27,11 @@ Feature: Create, sign and review the disposable Additional issuance of Bonds app
     Then the repaired signed disposable document exists in the file system
 
   Scenario: View the History tab of a disposable Additional issuance of Bonds application
-    Given a fresh saved disposable "Additional issuance of Bonds" application exists
+    Given a reusable saved disposable "Additional issuance of Bonds" application exists
     When I open the "History" tab of the disposable application
     Then the disposable draft History contains the current application creation event
 
   Scenario: View the Attachments tab of a disposable Additional issuance of Bonds application
-    Given a fresh saved disposable "Additional issuance of Bonds" application exists
+    Given a reusable saved disposable "Additional issuance of Bonds" application exists
     When I open the "Attachments" tab of the disposable application
     Then the disposable application Attachments tab is entered

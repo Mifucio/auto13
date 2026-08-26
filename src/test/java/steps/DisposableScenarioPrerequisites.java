@@ -67,6 +67,12 @@ public final class DisposableScenarioPrerequisites {
     flow.persistContract();
   }
 
+  /** Re-establishes the cheap authenticated customer context without creating data. */
+  void prepareReusableCustomerContext() {
+    prepareAuthenticatedCompany(DEFAULT_COMPANY);
+    CustomerRepairSteps.ensureCustomerEnglish();
+  }
+
   @And("I select and verify company {string} for the disposable application")
   public void selectAndVerifyCompany(String company) {
     String current = url();
@@ -148,9 +154,24 @@ public final class DisposableScenarioPrerequisites {
       + " form did not expose a ready Source instrument control; observed=" + inventory);
   }
 
-  private static void assertOrRepairCompanyContext(String company) {
+  /**
+   * Verifies the active represented-company context and repairs only the
+   * customer SPA selection when the restored authenticated shell has no active
+   * company. This deliberately leaves cookies, XSRF state, and browser storage
+   * untouched so callers can invoke it immediately before a protected API
+   * action.
+   */
+  public static boolean ensureRepresentedCompanyReady(String company) {
+    String current = url();
+    if (current == null || current.contains("/login")) {
+      throw new AssertionError("Cannot establish represented company while customer session is on login; url=" + current);
+    }
+    if (current.contains("/company-selection")) {
+      CustomerRepairSteps.selectRepresentedCompanyCardOnSelectionPage(company);
+    }
+
     SelenideElement selected = $("#navbarRepresentedDropdown").shouldBe(visible);
-    if (normalized(selected.getText()).contains(normalized(company))) return;
+    if (normalized(selected.getText()).contains(normalized(company))) return true;
 
     selected.click();
     sleep(250);
@@ -160,11 +181,23 @@ public final class DisposableScenarioPrerequisites {
       String label = normalized(candidate.getText());
       if (label.equals(normalized(company))) matches.add(candidate);
     }
-    if (matches.isEmpty()) {
-      throw new AssertionError("Authenticated session represents a different company and the requested company was not selectable: " + company);
+    if (matches.size() != 1) {
+      throw new AssertionError("Authenticated session represents a different company and the requested company did not expose exactly one selectable option: "
+        + company + "; found=" + matches.size());
     }
-    matches.get(matches.size() - 1).click();
-    $("#navbarRepresentedDropdown").shouldHave(text(company));
+    matches.get(0).click();
+    long deadline = System.currentTimeMillis() + Configuration.timeout;
+    while (System.currentTimeMillis() < deadline) {
+      SelenideElement refreshed = $("#navbarRepresentedDropdown");
+      if (refreshed.isDisplayed() && normalized(refreshed.getText()).contains(normalized(company))) return true;
+      sleep(100);
+    }
+    throw new AssertionError("Represented-company SPA selection did not establish the requested company: " + company
+      + "; url=" + url());
+  }
+
+  private static void assertOrRepairCompanyContext(String company) {
+    ensureRepresentedCompanyReady(company);
   }
 
   private static String normalized(String value) {

@@ -76,9 +76,9 @@ public final class NetworkMockSupport {
       long now = System.currentTimeMillis();
       boolean quiet = PENDING_DATA_REQUESTS.isEmpty() && (lastDataActivityAt == 0 || now - lastDataActivityAt >= NETWORK_QUIET_MS);
       if (quiet) return;
-      if (now - startedAt >= Math.min(EXTERNAL_TIMEOUT_MS, HANG_TIMEOUT_MS)) {
+      if (now - startedAt >= HANG_TIMEOUT_MS) {
         String pendingUrls = PENDING_DATA_REQUESTS.values().stream().map(request -> request.url).distinct().collect(Collectors.joining(", "));
-        throw new AssertionError("HANG_DETECTED external data exceeded " + EXTERNAL_TIMEOUT_MS + "ms; pending URLs: " + pendingUrls);
+        throw new AssertionError("HANG_DETECTED external data exceeded " + HANG_TIMEOUT_MS + "ms; pending URLs: " + pendingUrls);
       }
       try { Thread.sleep(50); } catch (InterruptedException e) {
         Thread.currentThread().interrupt();

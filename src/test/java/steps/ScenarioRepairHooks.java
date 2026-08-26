@@ -14,6 +14,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.Set;
 
 import static com.codeborne.selenide.Selenide.open;
 import static steps.RuntimeState.*;
@@ -21,16 +22,26 @@ import static steps.RuntimeState.*;
 /**
  * Repair-time scenario isolation shared by the generated suite.
  *
- * The original harness inferred the initial application only from filenames
- * beginning with "admin-", while the current suite uses *-int.feature and
- * [admin] scenario names. That left many INT scenarios starting on the
- * customer origin. This hook runs after the generated default hook and binds
- * each scenario to the correct application origin before its first step.
+ * Business data remains scenario-scoped, but authentication is intentionally
+ * reused between ordinary scenarios. A real Mobile-ID/Dokobit login costs
+ * roughly 30-70 seconds in the live environment; deleting the complete Chrome
+ * cookie store after every scenario made the suite spend most of its wall time
+ * re-authenticating instead of testing business behavior.
  *
- * It also clears run-local network bookkeeping, stale downloads, and browser
- * authentication state so a later scenario cannot inherit a previous login.
+ * Scenarios whose purpose includes login/company-selection still start from a
+ * clean browser auth state. Cross-surface helpers explicitly clear auth when
+ * switching customer -> admin, so preserving sessions here does not blur the
+ * two application origins.
  */
 public final class ScenarioRepairHooks {
+  private static final Set<String> FRESH_AUTH_FEATURES = Set.of(
+    "user-login-via-dokobit-smart-id-or-mobile-id.feature",
+    "user-manual-login.feature",
+    "choose-which-company-to-represent.feature",
+    "create-application-open-new-form-creation-page.feature",
+    "add-attachment-to-new-application.feature",
+    "open-user-settings-make-and-save-changes.feature"
+  );
 
   @Before(order = 20_000)
   public void prepareScenario(Scenario scenario) {
@@ -39,6 +50,10 @@ public final class ScenarioRepairHooks {
     clearDefaultDownloads();
 
     String feature = featureName(scenario);
+    if (FRESH_AUTH_FEATURES.contains(feature)) {
+      clearBrowserAuthenticationState();
+    }
+
     boolean adminScenario = scenario.getName().startsWith("[admin]")
       || feature.endsWith("-int.feature");
 
@@ -52,11 +67,18 @@ public final class ScenarioRepairHooks {
   }
 
   @After(order = 20_000)
-  public void cleanupScenario() {
+  public void cleanupScenario(Scenario scenario) {
     PENDING_DATA_REQUESTS.clear();
     lastDataActivityAt = 0;
     disableChromeFetchInterception();
-    clearBrowserAuthenticationState();
+
+    // Keep a healthy authenticated session for the next scenario. Only purge
+    // auth when the failed scenario actually ended on an authentication or
+    // represented-company boundary; those states are unsafe to reuse.
+    String current = currentUrl();
+    if (scenario.isFailed() && (current.contains("/login") || current.contains("/company-selection"))) {
+      clearBrowserAuthenticationState();
+    }
   }
 
   private static String featureName(Scenario scenario) {
@@ -132,9 +154,6 @@ public final class ScenarioRepairHooks {
         "try{window.localStorage.clear();}catch(e){} try{window.sessionStorage.clear();}catch(e){}");
     } catch (Throwable ignored) { }
 
-    // WebDriver's deleteAllCookies can be origin-scoped. CDP clearBrowserCookies
-    // clears the complete Chrome cookie store, preventing a customer session
-    // from resurfacing after intervening admin scenarios.
     try {
       if (driver instanceof HasDevTools hasDevTools) {
         hasDevTools.getDevTools().send(Network.clearBrowserCookies());

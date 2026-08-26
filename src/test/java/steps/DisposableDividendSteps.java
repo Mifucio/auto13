@@ -27,12 +27,15 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import static com.codeborne.selenide.Condition.enabled;
 import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.*;
 import static steps.AuthSupport.*;
 
 public final class DisposableDividendSteps {
   private static final Path SESSION_COOKIES = Path.of("build", "private", "customer-session.cookies");
+  private static final String REPRESENTED_COMPANY = "AutotestLtSingleSignee";
+  private static final String SIGNER_FULL_NAME = "MARY ÄNN O’CONNEŽ-ŠUSLIK TESTNUMBER";
   private String appType = "Dividend Payment";
   private String sourceInstrument;
   private BigDecimal totalPaymentAmount;
@@ -45,12 +48,42 @@ public final class DisposableDividendSteps {
     return Path.of("build", "reports", "disposable-" + key + "-application.properties");
   }
 
+  private boolean customerSessionReady(String currentUrl, String expectedCompany) {
+    if (currentUrl == null || currentUrl.contains("/login")) return false;
+    if (currentUrl.contains("/company-selection")) return visibleExpectedCompanyCard(expectedCompany);
+    if (!currentUrl.contains("/corporate-actions")) return false;
+    try {
+      SelenideElement represented = $("#navbarRepresentedDropdown");
+      return represented.isDisplayed() && normalize(represented.getText())
+        .equals(normalize(expectedCompany));
+    } catch (Throwable ignored) {
+      return false;
+    }
+  }
+
+  private boolean visibleExpectedCompanyCard(String expectedCompany) {
+    try {
+      Number matches = executeJavaScript(
+        "const wanted=String(arguments[0]).toLowerCase();"
+          + "return [...document.querySelectorAll('a.stretched-link')].filter(a=>{"
+          + " const card=a.parentElement;"
+          + " const text=(card?.innerText||'').replace(/\\s+/g,' ').trim().toLowerCase();"
+          + " return !!card && card.getClientRects().length>0 && text.includes(wanted);"
+          + "}).length;",
+        expectedCompany);
+      return matches != null && matches.intValue() == 1;
+    } catch (Throwable ignored) {
+      return false;
+    }
+  }
+
   @Given("I log in through Mobile ID for the disposable application")
   public void login() {
     open("/");
     restoreSessionCookies();
     open("/login");
     boolean cachedSession = Files.isRegularFile(SESSION_COOKIES);
+    boolean attemptedBoundedContextRecovery = false;
     long sessionDeadline = System.currentTimeMillis() + 15000;
     while (System.currentTimeMillis() < sessionDeadline) {
       if (bodyShowsNotAuthorized()) {
@@ -58,8 +91,18 @@ public final class DisposableDividendSteps {
         break;
       }
       String currentUrl = webdriver().driver().url();
-      if (!currentUrl.contains("/login") || $("#navbarRepresentedDropdown").isDisplayed()
-        || currentUrl.contains("/company-selection")) {
+      if (redirectAuthenticatedCustomerToCorporateActions(currentUrl, REPRESENTED_COMPANY)) continue;
+      boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY);
+      if (!sessionReady && !attemptedBoundedContextRecovery && currentUrl != null
+          && (currentUrl.contains("/company-selection") || currentUrl.contains("/corporate-actions"))) {
+        attemptedBoundedContextRecovery = true;
+        if (tryBoundedCustomerContextRecovery(currentUrl)) {
+          sessionReused = true;
+          persistSessionCookies();
+          return;
+        }
+      }
+      if (sessionReady) {
         System.out.println("DISPOSABLE_SESSION_REUSED url=" + currentUrl);
         sessionReused = true;
         persistSessionCookies();
@@ -81,7 +124,18 @@ public final class DisposableDividendSteps {
           break;
         }
         String currentUrl = webdriver().driver().url();
-        if (!currentUrl.contains("/login")) {
+        if (redirectAuthenticatedCustomerToCorporateActions(currentUrl, REPRESENTED_COMPANY)) continue;
+        boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY);
+        if (!sessionReady && !attemptedBoundedContextRecovery && currentUrl != null
+            && (currentUrl.contains("/company-selection") || currentUrl.contains("/corporate-actions"))) {
+          attemptedBoundedContextRecovery = true;
+          if (tryBoundedCustomerContextRecovery(currentUrl)) {
+            sessionReused = true;
+            persistSessionCookies();
+            return;
+          }
+        }
+        if (sessionReady) {
           System.out.println("DISPOSABLE_SESSION_REUSED_LATE url=" + currentUrl);
           sessionReused = true;
           persistSessionCookies();
@@ -100,7 +154,7 @@ public final class DisposableDividendSteps {
         enterDokobitPhone("60000666");
         enterDokobitPersonalCode("50001018865");
         submitDokobitLogin();
-        awaitAuthenticatedCustomer();
+        awaitAuthenticatedCustomer("/corporate-actions", REPRESENTED_COMPANY);
         persistSessionCookies();
         sessionReused = false;
         return;
@@ -110,10 +164,39 @@ public final class DisposableDividendSteps {
           throw loginFailure instanceof AssertionError ? (AssertionError) loginFailure
             : new AssertionError("Mobile ID login failed after retry: " + loginFailure);
         }
+        System.out.println("DISPOSABLE_FRESH_LOGIN_RECOVERY attempt=" + (attempt + 1)
+          + " reason=customer-spa-not-ready");
         clearSessionCookies();
         sleep(800);
         open("/login");
       }
+    }
+  }
+
+  private boolean tryBoundedCustomerContextRecovery(String currentUrl) {
+    System.out.println("DISPOSABLE_CACHED_CONTEXT_RECOVERY from=" + currentUrl);
+    try {
+      awaitAuthenticatedCustomer("/corporate-actions", REPRESENTED_COMPANY);
+      return true;
+    } catch (AssertionError failure) {
+      System.out.println("DISPOSABLE_CACHED_CONTEXT_RECOVERY_FAILED url="
+        + webdriver().driver().url() + " err=" + failure.getMessage());
+      return false;
+    }
+  }
+
+  private boolean redirectAuthenticatedCustomerToCorporateActions(String currentUrl, String expectedCompany) {
+    if (currentUrl == null || currentUrl.contains("/login") || currentUrl.contains("/company-selection")
+        || currentUrl.contains("/corporate-actions")) return false;
+    try {
+      SelenideElement represented = $("#navbarRepresentedDropdown");
+      if (!represented.isDisplayed() || !normalize(represented.getText())
+          .equals(normalize(expectedCompany))) return false;
+      System.out.println("DISPOSABLE_CUSTOMER_CONTEXT_REDIRECT from=" + currentUrl);
+      open("/corporate-actions");
+      return true;
+    } catch (Throwable ignored) {
+      return false;
     }
   }
 
@@ -123,6 +206,9 @@ public final class DisposableDividendSteps {
       for (Cookie cookie : webdriver().driver().getWebDriver().manage().getCookies()) {
         webdriver().driver().getWebDriver().manage().deleteCookie(cookie);
       }
+    } catch (Throwable ignored) { }
+    try {
+      executeJavaScript("try{localStorage.clear()}catch(e){} try{sessionStorage.clear()}catch(e){}");
     } catch (Throwable ignored) { }
   }
 
@@ -135,25 +221,40 @@ public final class DisposableDividendSteps {
 
   @And("I select company {string} for the disposable application")
   public void selectCompany(String company) {
-    if (sessionReused && !webdriver().driver().url().contains("/company-selection")) {
-      $("#navbarRepresentedDropdown").shouldBe(visible);
-      System.out.println("DISPOSABLE_COMPANY_CONTEXT_REUSED requested=" + company);
+    String currentUrl = webdriver().driver().url();
+    if (sessionReused && !currentUrl.contains("/company-selection")) {
+      if (representedCompanyMatches(company)) {
+        System.out.println("DISPOSABLE_COMPANY_CONTEXT_REUSED requested=" + company);
+        return;
+      }
+      System.out.println("DISPOSABLE_COMPANY_CONTEXT_MISMATCH requested=" + company
+        + " url=" + currentUrl);
+      if (!tryBoundedCustomerContextRecovery(currentUrl) || !representedCompanyMatches(company)) {
+        throw new AssertionError("Reused customer session did not establish represented company '"
+          + company + "' after bounded recovery; url=" + webdriver().driver().url());
+      }
+      persistSessionCookies();
       return;
     }
-    if (!webdriver().driver().url().contains("/company-selection")) {
+    if (!currentUrl.contains("/company-selection")) {
       SelenideElement represented = $("#navbarRepresentedDropdown");
       long representedDeadline = System.currentTimeMillis() + 10000;
       while (System.currentTimeMillis() < representedDeadline) {
         if (represented.isDisplayed()) {
-          if (represented.getText().contains(company)) {
+          if (representedCompanyMatches(company)) {
             System.out.println("DISPOSABLE_COMPANY_REUSED " + company);
             return;
           }
           represented.click();
           sleep(300);
-          List<SelenideElement> choices = exactVisible(company, "a, button, [role=menuitem], [role=button], li, div, span");
-          if (!choices.isEmpty()) {
-            choices.get(choices.size() - 1).click();
+          List<SelenideElement> choices = exactSelectableCompanyChoices(company);
+          if (choices.size() > 1) {
+            throw new AssertionError("Expected exactly one visible enabled represented-company choice '"
+              + company + "', found " + choices.size());
+          }
+          if (choices.size() == 1) {
+            choices.get(0).scrollIntoView("{block:'center',inline:'center'}").click();
+            awaitRepresentedCompany(company, representedDeadline);
             persistSessionCookies();
             return;
           }
@@ -166,6 +267,7 @@ public final class DisposableDividendSteps {
       try {
         selectObservedCompanyToRepresent(company);
         assertCompanyContextApplied();
+        awaitRepresentedCompany(company, System.currentTimeMillis() + Configuration.timeout);
         persistSessionCookies();
         return;
       } catch (AssertionError error) {
@@ -178,6 +280,41 @@ public final class DisposableDividendSteps {
       }
     }
     throw lastSelectError;
+  }
+
+  private boolean representedCompanyMatches(String expectedCompany) {
+    String wanted = normalize(expectedCompany);
+    if (wanted.isBlank()) return false;
+    try {
+      SelenideElement represented = $("#navbarRepresentedDropdown");
+      return represented.isDisplayed() && normalize(represented.getText()).equals(wanted);
+    } catch (Throwable ignored) {
+      return false;
+    }
+  }
+
+  private List<SelenideElement> exactSelectableCompanyChoices(String expectedCompany) {
+    String wanted = normalize(expectedCompany);
+    List<SelenideElement> matches = new ArrayList<>();
+    for (SelenideElement candidate : $("body").$$("a, button, [role=menuitem], [role=option], [role=button]")) {
+      try {
+        if (candidate.isDisplayed() && candidate.isEnabled() && wanted.equals(normalize(candidate.getText()))) {
+          matches.add(candidate);
+        }
+      } catch (Throwable ignored) {
+        // The menu can rerender while the bounded selection loop is polling.
+      }
+    }
+    return matches;
+  }
+
+  private void awaitRepresentedCompany(String expectedCompany, long deadline) {
+    while (System.currentTimeMillis() < deadline) {
+      if (representedCompanyMatches(expectedCompany)) return;
+      sleep(200);
+    }
+    throw new AssertionError("Represented-company selection did not establish expected company '"
+      + expectedCompany + "'; url=" + webdriver().driver().url());
   }
 
   private void persistSessionCookies() {
@@ -642,10 +779,60 @@ public final class DisposableDividendSteps {
 
   @When("I initiate the signing process")
   public void initiateSigningProcess() {
-    List<SelenideElement> initiate = exactVisible("Initiate signing process", "button, a, [role=button]");
-    if (!initiate.isEmpty()) initiate.get(initiate.size() - 1).click();
-    else System.out.println("DISPOSABLE_SIGNING_ALREADY_INITIATED");
-    awaitBodyText("Sign");
+    List<SelenideElement> initiate = exactVisible("Initiate signing process", "button, a, [role=button]")
+      .stream().filter(this::usableSigningInitiateControl).toList();
+    if (!initiate.isEmpty()) {
+      DisposableScenarioPrerequisites.ensureRepresentedCompanyReady("AutotestLtSingleSignee");
+      initiate = exactVisible("Initiate signing process", "button, a, [role=button]")
+        .stream().filter(this::usableSigningInitiateControl).toList();
+      if (initiate.isEmpty()) {
+        throw new AssertionError("Represented-company re-selection removed the signing initiation control; url="
+          + webdriver().driver().url());
+      }
+      SelenideElement control = initiate.get(initiate.size() - 1);
+      System.out.println("DISPOSABLE_INITIATE_CONTROL " + signingControlDescription(control));
+      control.scrollIntoView("{block:'center',inline:'center'}").shouldBe(visible, enabled);
+      control.click();
+      awaitSigningActivation();
+    } else {
+      System.out.println("DISPOSABLE_SIGNING_ALREADY_INITIATED");
+    }
+    awaitSignerForm();
+  }
+
+  private boolean usableSigningInitiateControl(SelenideElement control) {
+    try {
+      return control.isEnabled()
+        && !"true".equalsIgnoreCase(safe(control.getAttribute("aria-disabled")))
+        && !"disabled".equalsIgnoreCase(safe(control.getAttribute("disabled")));
+    } catch (Throwable ignored) {
+      return false;
+    }
+  }
+
+  private String signingControlDescription(SelenideElement control) {
+    try {
+      Object description = executeJavaScript(
+        "const e=arguments[0]; return JSON.stringify({tag:e.tagName,id:e.id||'',className:e.className||'',"
+          + "ariaDisabled:e.getAttribute('aria-disabled')||'',disabled:e.hasAttribute('disabled'),"
+          + "outerHTML:(e.outerHTML||'').slice(0,800)});", control);
+      return safe(String.valueOf(description));
+    } catch (Throwable ignored) {
+      return "metadata-unavailable";
+    }
+  }
+
+  private void awaitSigningActivation() {
+    long deadline = System.currentTimeMillis() + Configuration.timeout;
+    while (System.currentTimeMillis() < deadline) {
+      String body = $("body").shouldBe(visible).getText();
+      if (!body.contains("Signature process has not started yet")
+        || body.contains(SIGNER_FULL_NAME)
+        || !exactVisible("Sign", "button, a, [role=button]").isEmpty()) return;
+      sleep(300);
+    }
+    throw new AssertionError("Initiate signing process did not activate the signing workflow; url="
+      + webdriver().driver().url());
   }
 
   @When("I click the Sign button for the disposable application")
@@ -658,25 +845,37 @@ public final class DisposableDividendSteps {
 
   @Then("the signer full name, signing date, Sign button, and document frame must be visible")
   public void signingFormVisible() {
-    String fullName = "MARY ÄNN O’CONNEŽ-ŠUSLIK TESTNUMBER";
+    awaitSignerForm();
+  }
+
+  private void awaitSignerForm() {
     long deadline = System.currentTimeMillis() + Configuration.timeout;
     String lastBody = "";
     while (System.currentTimeMillis() < deadline) {
       try {
         lastBody = $("body").shouldBe(visible).getText();
       } catch (Throwable ignored) { }
-      boolean nameVisible = lastBody.contains(fullName);
-      boolean signButton = false;
-      try { signButton = !exactVisible("Sign", "button, a, [role=button]").isEmpty(); }
-      catch (Throwable ignored) { }
-      if (nameVisible && signButton) {
+      if (signerFormReady(lastBody)) {
         screenshot("disposable-dividend-signing-form-" + applicationId);
         return;
       }
       sleep(300);
     }
     System.out.println("SIGNING_FORM_BODY_LAST >>>" + lastBody + "<<<");
-    throw new AssertionError("Signing form did not show the signer full name and Sign button; url=" + webdriver().driver().url());
+    throw new AssertionError("Signing process did not render the signer form, exact Sign control, and document frame; url="
+      + webdriver().driver().url());
+  }
+
+  private boolean signerFormReady(String body) {
+    if (body == null || !body.contains(SIGNER_FULL_NAME)) return false;
+    try {
+      if (exactVisible("Sign", "button, a, [role=button]").isEmpty()) return false;
+      for (SelenideElement frame : $("body").$$(
+          "iframe,object,embed,[data-testid*=document],[class*=document-frame]")) {
+        if (frame.isDisplayed()) return true;
+      }
+    } catch (Throwable ignored) { }
+    return false;
   }
 
   @When("I sign the document with Mobile ID phone number {string}")

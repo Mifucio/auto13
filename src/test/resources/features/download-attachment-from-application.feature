@@ -1,9 +1,11 @@
 @req:CA-24
 @cross_surface_disposable_admin
 Feature: "Download attachment from application"
-  Requirement CA-24 creates one known disposable attachment through the customer surface and verifies its admin-side download.
+  Requirement CA-24 verifies a known supported attachment on a disposable application and its admin-side download.
 
   Scenario: [admin] download one known disposable uploaded attachment
-    Given a fresh disposable customer Bonus Issue draft with a persisted attachment is opened in the admin application
-    When I download the persisted disposable attachment from the admin application
-    Then the persisted disposable attachment download exists
+    Given a fresh disposable customer Bonus Issue draft is opened in the admin application
+    When I attach the supported PDF fixture in the current application Attachments tab
+    Then the supported PDF fixture is visible in the current application
+    When I download the supported PDF fixture from the current application
+    Then the supported PDF fixture download exists

@@ -280,7 +280,7 @@ public class AdminSteps {
       }
       sleep(1500);
       Object trace = executeJavaScript("if (window.__ca29Trace && window.__ca29Trace.collect) window.__ca29Trace.collect(); return JSON.stringify(window.__ca29Trace || {})");
-      traceJson = trace == null ? "{}" : trace.toString();
+      traceJson = Ca29RepairSteps.sanitizeDiagnosticTrace(trace == null ? "{}" : trace.toString());
     } finally {
       Configuration.downloadsFolder = previousDownloadsFolder;
       Configuration.fileDownload = previousDownloadMode;
@@ -293,9 +293,9 @@ public class AdminSteps {
       evidence = new JsonObject();
       evidence.addProperty("traceParseFailure", parseFailure.getClass().getSimpleName());
     }
-    evidence.addProperty("selectedRow", SELECTED_CORPORATE_ACTION.get().summary());
-    evidence.addProperty("beforeRoute", beforeUrl);
-    evidence.addProperty("afterRoute", safeRoute(WebDriverRunner.url()));
+    evidence.addProperty("selectedRow", Ca29RepairSteps.sanitizeDiagnosticText(SELECTED_CORPORATE_ACTION.get().summary()));
+    evidence.addProperty("beforeRoute", Ca29RepairSteps.sanitizeDiagnosticText(beforeUrl));
+    evidence.addProperty("afterRoute", Ca29RepairSteps.sanitizeDiagnosticText(safeRoute(WebDriverRunner.url())));
     evidence.addProperty("downloadFolder", downloads.toString());
     evidence.addProperty("downloadFailure", downloadFailure == null ? "" : downloadFailure);
     if (downloaded != null) {
@@ -368,7 +368,7 @@ public class AdminSteps {
     return value.substring(0, end);
   }
 
-  private static String captureCa29Evidence(String payload) {
+  static String captureCa29Evidence(String payload) { // package-visible: reused by Ca29RepairSteps diagnostics
     String runId = System.getenv().getOrDefault("TEST_RUN_ID", "local")
       .replaceAll("[^A-Za-z0-9._-]", "_");
     Path directory = Path.of("reports", "evidence", runId, "ca29-diagnostics");
@@ -376,7 +376,7 @@ public class AdminSteps {
     Path file = directory.resolve(fileName);
     try {
       Files.createDirectories(directory);
-      Files.writeString(file, payload == null ? "{}" : payload, StandardCharsets.UTF_8);
+      Files.writeString(file, Ca29RepairSteps.sanitizeDiagnosticTrace(payload), StandardCharsets.UTF_8);
       System.out.println("CA29_EVIDENCE_FILE " + file.toAbsolutePath());
       return file.toAbsolutePath().toString();
     } catch (java.io.IOException error) {
@@ -624,7 +624,7 @@ public class AdminSteps {
    * history/toast/error transitions, blob/link download clues, and resource
    * timing. It never observes request bodies or query strings.
    */
-  private static void installCa29Trace() {
+  static void installCa29Trace() { // package-visible: reused by Ca29RepairSteps diagnostics
     executeJavaScript("""
       (() => {
         if (window.__ca29Trace && window.__ca29Trace.installed) return 'already-installed';

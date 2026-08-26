@@ -12,6 +12,7 @@ Feature: Create, sign and review the disposable Bonus Issue application
     When I fill and safely save the disposable "Bonus Issue" form as draft
     Then the Sign Document button must be visible
     And I persist the disposable application ID and remembered source instrument
+    And I remember this disposable "Bonus Issue" draft for read-only scenarios
 
   Scenario: Sign a disposable Bonus Issue application and download the signed document
     Given a fresh saved disposable "Bonus Issue" application exists
@@ -26,11 +27,11 @@ Feature: Create, sign and review the disposable Bonus Issue application
     Then the repaired signed disposable document exists in the file system
 
   Scenario: View the History tab of a disposable Bonus Issue application
-    Given a fresh saved disposable "Bonus Issue" application exists
+    Given a reusable saved disposable "Bonus Issue" application exists
     When I open the "History" tab of the disposable application
     Then the disposable draft History contains the current application creation event
 
   Scenario: View the Attachments tab of a disposable Bonus Issue application
-    Given a fresh saved disposable "Bonus Issue" application exists
+    Given a reusable saved disposable "Bonus Issue" application exists
     When I open the "Attachments" tab of the disposable application
     Then the disposable application Attachments tab is entered
