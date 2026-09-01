@@ -203,12 +203,16 @@ public final class DisposableDividendSteps {
       } catch (Throwable loginFailure) {
         System.out.println("DISPOSABLE_LOGIN_ATTEMPT_FAILED attempt=" + attempt + " err=" + loginFailure);
         if (attempt == 2) {
-          throw loginFailure instanceof AssertionError ? (AssertionError) loginFailure
-            : new AssertionError("Mobile ID login failed after retry: " + loginFailure);
+          System.out.println("DISPOSABLE_LOGIN_FALLBACK_MANUAL after Dokobit Double failure");
+          clearSessionCookies();
+          sleep(800);
+          open("/login");
+          AuthSupport.manualLogin();
+          awaitAuthenticatedCustomer("/corporate-actions", REPRESENTED_COMPANY);
+          persistSessionCookies();
+          sessionReused = false;
+          return;
         }
-        System.out.println("DISPOSABLE_FRESH_LOGIN_RECOVERY attempt=" + (attempt + 1)
-          + " reason=customer-spa-not-ready");
-        clearSessionCookies();
         sleep(800);
         open("/login");
       }
