@@ -1916,6 +1916,7 @@ public class AdminSteps {
     for (int rowOrdinal = 0; rowOrdinal < initialRows.size(); rowOrdinal++) {
       SelenideElement row = initialRows.get(rowOrdinal);
       CorporateActionIdentity identity = corporateActionIdentity(row.$$("td"));
+      if ("Invalid".equalsIgnoreCase(identity.status())) { System.out.println("CA24_ROW_SKIPPED_INVALID " + identity.summary()); continue; }
       candidates.add(new Ca24ApplicationCandidate(identity, rowOrdinal));
       String observedRow = "row=" + rowOrdinal + " " + identity.summary();
       observedRows.add(observedRow);
