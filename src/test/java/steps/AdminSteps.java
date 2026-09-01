@@ -937,6 +937,42 @@ public class AdminSteps {
     screenshot("direct-ca-filter-bonus-issue-results");
   }
 
+  private static String lastCaSearchQuery = null;
+
+  @When("I search the observed corporate actions list by {string}")
+  public void i_search_the_observed_corporate_actions_list_by(String query) {
+    lastCaSearchQuery = query;
+    assertCorporateActionsListSurface();
+    SelenideElement searchInput = $("input[formcontrolname='inputSearchValue']").shouldBe(visible);
+    // Use the native value setter + input event so Angular's FormControl picks up the change
+    executeJavaScript(
+      "var el = arguments[0];"
+      + "var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;"
+      + "nativeSetter.call(el, arguments[1]);"
+      + "el.dispatchEvent(new Event('input', {bubbles: true}));"
+      + "el.dispatchEvent(new Event('change', {bubbles: true}));",
+      searchInput.getWrappedElement(), query);
+    sleep(400);
+    uniqueObservedControl("Apply filters").click();
+    awaitCorporateActionsRows();
+  }
+
+  @Then("corporate_actions_search_results_visible")
+  public void corporate_actions_search_results_visible() {
+    assertCorporateActionsListSurface();
+    List<SelenideElement> rows = awaitCorporateActionsRows();
+    if (rows.isEmpty()) throw new AssertionError("Corporate-action search word returned no observable rows");
+    String query = lastCaSearchQuery == null ? "" : lastCaSearchQuery.trim().toLowerCase(java.util.Locale.ROOT);
+    if (query.isEmpty()) throw new AssertionError("No corporate-action search query remembered for assertion");
+    for (SelenideElement row : rows) {
+      String text = row.getText().toLowerCase(java.util.Locale.ROOT);
+      if (!text.contains(query)) {
+        throw new AssertionError("Corporate-action search for '" + lastCaSearchQuery + "' returned a row that does not contain the search term: " + row.getText());
+      }
+    }
+    screenshot("direct-ca-search-word-results");
+  }
+
   private static void assertCorporateActionsListSurface() {
     String url = WebDriverRunner.url();
     if (url == null || !url.matches("https://eservicesdevint\\.sets\\.lv/corporate-actions(?:[/?#].*)?")) {
