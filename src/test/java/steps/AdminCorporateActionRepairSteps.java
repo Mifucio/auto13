@@ -19,6 +19,7 @@ import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
 import static com.codeborne.selenide.Selenide.sleep;
+import static com.codeborne.selenide.Selenide.screenshot;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
 /**
@@ -79,11 +80,23 @@ public final class AdminCorporateActionRepairSteps {
   @Then("the latest observed Corporate Actions application details are visible")
   public void latestApplicationDetailsVisible() {
     requireDetailRoute();
-    String body = $("body").shouldBe(visible).getText();
     String form = SELECTED_FORM.get();
-    if (form != null && !normalize(body).contains(normalize(form))) {
-      throw new AssertionError("Opened Corporate Actions detail does not visibly contain selected form '" + form + "'");
+    long deadline = System.currentTimeMillis() + Configuration.timeout;
+    String lastBody = "";
+    while (System.currentTimeMillis() < deadline) {
+      SelenideElement body = $("body");
+      if (body.isDisplayed()) {
+        lastBody = body.getText();
+        if (form == null || normalize(lastBody).contains(normalize(form))) {
+          screenshot("direct-ca-single-application-details");
+          return;
+        }
+      }
+      sleep(250);
     }
+    int snippet = Math.min(lastBody.length(), 600);
+    throw new AssertionError("Opened Corporate Actions detail does not visibly contain selected form '" + form
+      + "; last body snippet: " + lastBody.substring(0, snippet));
   }
 
   @And("I download the latest observed Corporate Actions application")
