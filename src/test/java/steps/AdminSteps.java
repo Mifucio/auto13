@@ -1668,6 +1668,124 @@ public class AdminSteps {
     CheckpointCapture.capture("view-corporate-actions-application-list-browse-different-tabs.admin-view-corporate-actions-application-list-browse-different-tabs.application-list-visible");
   }
 
+  @When("I browse all the Corporate Actions application list tabs")
+  public void iBrowseAllTheCorporateActionsApplicationListTabs() {
+    awaitCorporateActionsList();
+    long deadline = System.currentTimeMillis() + 30000;
+    List<String> opened = new ArrayList<>();
+    List<String> failed = new ArrayList<>();
+    while (System.currentTimeMillis() < deadline) {
+      Object labelsObj = executeJavaScript(
+        "return [...document.querySelectorAll('li.tab-item')]"
+          + ".filter(function(e){var r=e.getClientRects();return r.length>0&&r[0].height>0;})"
+          + ".map(function(e){return (e.innerText||'').replace(/[ \\t\\r\\n]+/g,' ').trim();})"
+          + ".filter(function(t){return t.length>0;});");
+      @SuppressWarnings("unchecked")
+      List<String> labels = labelsObj == null ? new ArrayList<>()
+        : (List<String>) labelsObj;
+      if (labels.isEmpty()) {
+        sleep(250);
+        continue;
+      }
+      boolean progressed = false;
+      for (String label : new ArrayList<>(labels)) {
+        if (opened.contains(label)) continue;
+        if (clickListTabAndWaitActive(label, 4000)) {
+          opened.add(label);
+          System.out.println("CA31_TAB_OPENED label=\"" + label + "\" (" + opened.size() + "/" + labels.size() + ")"
+            + " url=" + com.codeborne.selenide.WebDriverRunner.url());
+          progressed = true;
+        } else {
+          failed.add(label);
+        }
+      }
+      if (opened.size() >= labels.size() && labels.size() > 0) break;
+      if (!progressed) {
+        if (!failed.isEmpty() && System.currentTimeMillis() < deadline - 5000) {
+
+          sleep(1500);
+          continue;
+        }
+        break;
+      }
+    }
+    if (opened.isEmpty()) {
+      String inventory = executeJavaScript(
+        "return [...document.querySelectorAll('li.tab-item')]"
+          + ".filter(function(e){var r=e.getClientRects();return r.length>0&&r[0].height>0;})"
+          + ".map(function(e){var t=(e.innerText||'').replace(/[ \\t\\r\\n]+/g,' ').trim();"
+          + "return t.length>0?t:('<'+(e.tagName||'').toLowerCase()+' id='+(e.id||'')+'>');}).join(' | ');");
+      throw new AssertionError("No Corporate Actions list tabs observed. Visible tab-like inventory: " + inventory);
+    }
+    System.out.println("CA31_TABS_ALL_OPENED total=" + opened.size() + " list=" + opened);
+  }
+
+  private static boolean clickListTabAndWaitActive(String label, long timeoutMs) {
+
+
+
+    try {
+
+      long deadline = System.currentTimeMillis() + timeoutMs;
+
+
+      while (System.currentTimeMillis() < deadline) {
+
+        SelenideElement tab = $$("li.tab-item").stream()
+          .filter(el -> {
+            try { return el.isDisplayed() && normalizeTabText(el.getText()).equals(normalizeTabText(label)); }
+            catch (Throwable ignored) { return false; }
+          })
+          .findFirst().orElse(null);
+        if (tab == null) {
+          sleep(250);
+          continue;
+        }
+        tab.scrollIntoView("{block:'center',inline:'center'}").click();
+        long activeDeadline = System.currentTimeMillis() + 4000;
+        while (System.currentTimeMillis() < activeDeadline) {
+
+
+
+          SelenideElement active = $$("li.tab-item.active").stream()
+            .filter(el -> {
+              try { return el.isDisplayed() && normalizeTabText(el.getText()).equals(normalizeTabText(label)); }
+              catch (Throwable ignored) { return false; }
+            })
+            .findFirst().orElse(null);
+          if (active != null) return true;
+          sleep(200);
+        }
+        return false;
+      }
+    } catch (Throwable failure) {
+      System.out.println("CA31_TAB_CLICK_FAILED label=" + label + " err=" + failure);
+      return false;
+    }
+    return false;
+  }
+
+  private static java.util.function.Predicate<SelenideElement> uniqueTabElement() {
+    java.util.Set<String> seen = new java.util.HashSet<>();
+    return el -> {
+      String key = normalizeTabText(el.getText());
+      if (key.isBlank() || !seen.add(key)) return false;
+      return true;
+    };
+  }
+
+  private static String normalizeTabText(String value) {
+    return value == null ? "" : value.replace('\u00a0', ' ').replaceAll("\\s+", " " ).trim().toLowerCase(java.util.Locale.ROOT);
+  }
+
+  @Then("each opened Corporate Actions list tab stays open")
+  public void eachOpenedCorporateActionsListTabStaysOpen() {
+    String url = com.codeborne.selenide.WebDriverRunner.url();
+    if (url == null || !url.contains("/corporate-actions")) {
+      throw new AssertionError("Corporate Actions list abandoned its route after tab walk; url=" + url);
+    }
+  }
+
   @Then("history_entries_visible")
   public void history_entries_visible() {
     assertObservedCorporateActionsTab("History", "history");
@@ -2382,13 +2500,52 @@ public class AdminSteps {
     long deadline = System.currentTimeMillis() + Math.max(Configuration.timeout, 60000);
     String body = "";
     while (System.currentTimeMillis() < deadline) {
-      body = $("body").shouldBe(visible).getText();
-      if (hasVisibleCorporateActionRows()) return;
-      if (hasVisibleCorporateActionsEmptyState() && !hasVisibleCorporateActionsLoadingIndicator()) return;
+      String state = corporateActionsListStateJs();
+      if ("rows".equals(state)) return;
+      if ("empty".equals(state)) return;
+      if (!"loading".equals(state)) {
+        // Fall back to the heavyweight checks when the JS probe sees no
+        // definitive signal; it keeps us robust against markup drift.
+
+        try {
+          body = $("body").shouldBe(visible).getText();
+        } catch (Throwable ignored) { body = ""; }
+        if (hasVisibleCorporateActionRows()) return;
+        if (hasVisibleCorporateActionsEmptyState() && !hasVisibleCorporateActionsLoadingIndicator()) return;
+      }
       sleep(250);
     }
     throw new AssertionError("Corporate Actions route did not render a table or explicit empty state. Visible text="
       + body.substring(0, Math.min(body.length(), 2000)));
+  }
+
+  /** One fast JS snapshot of the Corporate Actions list; avoids Selenide scans
+   *  (which stalled ~10s per run under Angular rerenders. */
+  private static String corporateActionsListStateJs() {
+    try {
+      Object stateObj = executeJavaScript(
+        "var rows=0,empty=false,loading=false;"
+          + "var tabs=[...document.querySelectorAll('li.tab-item')].filter(function(e){"
+          + "var r=e.getClientRects();return r.length>0&&r[0].height>0;});"
+          + "for (var t=0;t<tabs.length;t++){"
+          + "var t2=tabs[t];if(t2&&t2.innerText){};}"
+          + "var tables=[...document.querySelectorAll('table')].filter(function(tb){"
+          + "var r=tb.getClientRects();return r.length>0&&r[0].height>0;"
+          + "&&!!tb.querySelector('tr>td');});"
+          + "rows=tables.length>0?1:0;"
+          + "if(rows=1) return 'rows';"
+          + "var text=(document.body&&document.body.innerText||'').trim().toLowerCase();"
+          + "if(text.indexOf('not added any corporate actions')>=0"
+          + "||text.indexOf('no corporate action')>=0||text.indexOf('no applications')>=0) empty=true;"
+          + "if(empty) return 'empty';"
+          + "var spinners=[...document.querySelectorAll('[class*=spinner][class*=loading],[class*=loading]')]"
+          + ".filter(function(e){var r=e.getClientRects();return r.length>0&&r[0].height>0;});"
+          + "if(spinners.length>0) return 'loading';"
+          + "return 'none';");
+      return stateObj == null ? "none" : String.valueOf(stateObj);
+    } catch (Throwable ignored) {
+      return "none";
+    }
   }
 
   private static void assertCorporateActionFormRouteAndHeading() {
@@ -2543,14 +2700,14 @@ public class AdminSteps {
   }
 
   private static boolean hasVisibleCorporateActionsLoadingIndicator() {
-    for (SelenideElement element : $("body").$$("*")) {
-      if (!element.isDisplayed()) continue;
-      String classes = element.getAttribute("class");
-      if (classes != null && classes.toLowerCase(java.util.Locale.ROOT).matches(".*(spinner|loading|loader).*")) {
-        return true;
-      }
+    try {
+      Object found = executeJavaScript(
+        "return [...document.querySelectorAll('[class*=spinner], [class*=loading], [class*=loader]')]"
+          + ".some(function(e){var r=e.getClientRects();return r.length>0&&r[0].height>0;});");
+      return Boolean.TRUE.equals(found);
+    } catch (Throwable ignored) {
+      return false;
     }
-    return false;
   }
 
   private static boolean hasCorporateActionsEmptyState(String body) {

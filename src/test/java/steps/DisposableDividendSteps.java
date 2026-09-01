@@ -137,6 +137,15 @@ public final class DisposableDividendSteps {
             break;
           }
         } catch (Throwable ignored) { }
+        // Restored storage can jump straight to a blank /company-selection
+        // shell (no login form) — the server session is gone too。
+        try {
+          Boolean blank = executeJavaScript("return document.body.innerText.trim().length===0;");
+          if (Boolean.TRUE.equals(blank) && currentUrl != null && currentUrl.contains("/company-selection")) {
+            System.out.println("DISPOSABLE_SESSION_STALE_BLANK_SHELL reuse-bailout url=" + currentUrl);
+            break;
+          }
+        } catch (Throwable ignored) { }
       }
       sleep(200);
     }

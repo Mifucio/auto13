@@ -925,32 +925,7 @@ public final class AuthSupport {
     String lastUrl = WebDriverRunner.url();
     String lastText = "";
     boolean redirectedToExpectedPath = false;
-    boolean companySelectionBlankRescueDone = false;
-    long companySelectionBlankSince = 0;
     while (System.currentTimeMillis() < deadline) {
-      lastUrl = WebDriverRunner.url();
-      try {
-        lastText = $("body").shouldBe(visible).getText();
-      } catch (Throwable ignored) {
-        lastText = "";
-      }
-      // /company-selection sometimes never bootstraps (blank shell) — reload
-      // the current route once so Angular renders the chooser.
-      if (lastUrl != null && lastUrl.contains("/company-selection") && !companySelectionBlankRescueDone) {
-        if (lastText == null || lastText.isBlank()) {
-          if (companySelectionBlankSince == 0) companySelectionBlankSince = System.currentTimeMillis();
-          else if (System.currentTimeMillis() - companySelectionBlankSince > 8000) {
-            System.out.println("AUTH_CUSTOMER_COMPANY_BLANK_RESCUE refresh url=" + lastUrl);
-            refresh();
-            companySelectionBlankRescueDone = true;
-            companySelectionBlankSince = 0;
-            sleep(1000);
-            continue;
-          }
-        } else {
-          companySelectionBlankSince = 0;
-        }
-      }
       String normalized = lastText == null ? "" : lastText.toLowerCase(java.util.Locale.ROOT);
       // If Okta SSO redirected to the admin origin (eservicesdevint) instead
       // of the customer page, navigate back and retry login.
