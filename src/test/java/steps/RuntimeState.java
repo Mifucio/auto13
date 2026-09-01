@@ -44,7 +44,7 @@ public final class RuntimeState {
   // ── Selenide Configuration ─────────────────────────────────────
   static {
     SelenideLogger.addListener("AllureSelenide", new AllureSelenide()
-      .screenshots(true)
+      .screenshots(false)
       .savePageSource(true));
     // HEADED=true (or HEADED=1) shows the browser window; default is headless.
     String headed = System.getenv("HEADED");

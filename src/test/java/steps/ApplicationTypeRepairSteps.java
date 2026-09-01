@@ -91,8 +91,11 @@ public final class ApplicationTypeRepairSteps {
 
         List<SelenideElement> rows = typeRows(modal, type);
         if (rows.size() > 1) {
-          throw new AssertionError("Expected exactly one visible application type row for '" + type
-            + "', found " + rows.size());
+          // Multiple rows match (different form versions). Always take the
+          // last one (newest version, bottom of the list).
+          System.out.println("APPLICATION_TYPE_MULTIPLE_ROWS type=" + type
+            + " count=" + rows.size() + " taking last (newest)");
+          return typeLabelCell(rows.get(rows.size() - 1), type);
         }
         if (rows.size() == 1) return typeLabelCell(rows.get(0), type);
       }

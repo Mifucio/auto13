@@ -34,6 +34,7 @@ import static steps.AuthSupport.*;
 
 public final class DisposableDividendSteps {
   private static final Path SESSION_COOKIES = Path.of("build", "private", "customer-session.cookies");
+  private static final Path SESSION_STORAGE = Path.of("build", "private", "customer-session.storage.json");
   private static final String REPRESENTED_COMPANY = "AutotestLtSingleSignee";
   private static final String SIGNER_FULL_NAME = "MARY ÄNN O’CONNEŽ-ŠUSLIK TESTNUMBER";
   private String appType = "Dividend Payment";
@@ -56,6 +57,20 @@ public final class DisposableDividendSteps {
       SelenideElement represented = $("#navbarRepresentedDropdown");
       return represented.isDisplayed() && normalize(represented.getText())
         .equals(normalize(expectedCompany));
+    } catch (Throwable ignored) {
+      return false;
+    }
+  }
+
+  /** Reuse-friendly readiness: any represented company counts — the caller
+   * switches context via the navbar Switch-company flow when needed. */
+  private boolean customerSessionReadyAnyCompany(String currentUrl) {
+    if (currentUrl == null || currentUrl.contains("/login")
+        || currentUrl.contains("/company-selection")) return false;
+    if (!currentUrl.contains("/corporate-actions") && !currentUrl.contains("/holders-information")) return false;
+    try {
+      SelenideElement represented = $("#navbarRepresentedDropdown");
+      return represented.isDisplayed() && !normalize(represented.getText()).isBlank();
     } catch (Throwable ignored) {
       return false;
     }
@@ -92,7 +107,8 @@ public final class DisposableDividendSteps {
       }
       String currentUrl = webdriver().driver().url();
       if (redirectAuthenticatedCustomerToCorporateActions(currentUrl, REPRESENTED_COMPANY)) continue;
-      boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY);
+      boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY)
+        || customerSessionReadyAnyCompany(currentUrl);
       if (!sessionReady && !attemptedBoundedContextRecovery && currentUrl != null
           && (currentUrl.contains("/company-selection") || currentUrl.contains("/corporate-actions"))) {
         attemptedBoundedContextRecovery = true;
@@ -112,6 +128,15 @@ public final class DisposableDividendSteps {
         try {
           if (!exactVisible("Mobile ID", "a, button, [role=button], div, span").isEmpty()) break;
         } catch (Throwable ignored) { }
+      } else {
+        // The login form is showing despite cached cookies — the server-side
+        // session is gone. Bail out of the reuse polls immediately.
+        try {
+          if (!exactVisible("Mobile ID", "a, button, [role=button], div, span").isEmpty()) {
+            System.out.println("DISPOSABLE_SESSION_STALE_LOGIN_FORM reuse-bailout");
+            break;
+          }
+        } catch (Throwable ignored) { }
       }
       sleep(200);
     }
@@ -125,7 +150,8 @@ public final class DisposableDividendSteps {
         }
         String currentUrl = webdriver().driver().url();
         if (redirectAuthenticatedCustomerToCorporateActions(currentUrl, REPRESENTED_COMPANY)) continue;
-        boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY);
+        boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY)
+          || customerSessionReadyAnyCompany(currentUrl);
         if (!sessionReady && !attemptedBoundedContextRecovery && currentUrl != null
             && (currentUrl.contains("/company-selection") || currentUrl.contains("/corporate-actions"))) {
           attemptedBoundedContextRecovery = true;
@@ -146,6 +172,13 @@ public final class DisposableDividendSteps {
         } catch (Throwable ignored) { }
         sleep(200);
       }
+    }
+    // Reuse failed — stale cookies/storage can leave a blank authenticated
+    // shell that blocks the fresh Dokobit flow. Wipe everything first.
+    if (cachedSession) {
+      System.out.println("DISPOSABLE_SESSION_PURGING_STALE_STATE before fresh login");
+      clearSessionCookies();
+      open("/login");
     }
     for (int attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -202,6 +235,7 @@ public final class DisposableDividendSteps {
 
   private void clearSessionCookies() {
     try { Files.deleteIfExists(SESSION_COOKIES); } catch (Exception ignored) { }
+    try { Files.deleteIfExists(SESSION_STORAGE); } catch (Exception ignored) { }
     try {
       for (Cookie cookie : webdriver().driver().getWebDriver().manage().getCookies()) {
         webdriver().driver().getWebDriver().manage().deleteCookie(cookie);
@@ -229,57 +263,142 @@ public final class DisposableDividendSteps {
       }
       System.out.println("DISPOSABLE_COMPANY_CONTEXT_MISMATCH requested=" + company
         + " url=" + currentUrl);
-      if (!tryBoundedCustomerContextRecovery(currentUrl) || !representedCompanyMatches(company)) {
-        throw new AssertionError("Reused customer session did not establish represented company '"
-          + company + "' after bounded recovery; url=" + webdriver().driver().url());
+      // Switch via the navbar dropdown → Switch Company modal (deep-linking
+      // /company-selection is accessdenied while authenticated).
+      if (!switchCompanyViaMenu(company)) {
+        throw new AssertionError("Reused customer session could not switch represented company to '"
+          + company + "'; url=" + webdriver().driver().url());
       }
       persistSessionCookies();
       return;
     }
     if (!currentUrl.contains("/company-selection")) {
-      SelenideElement represented = $("#navbarRepresentedDropdown");
-      long representedDeadline = System.currentTimeMillis() + 10000;
+      long representedDeadline = System.currentTimeMillis() + 20000;
       while (System.currentTimeMillis() < representedDeadline) {
-        if (represented.isDisplayed()) {
-          if (representedCompanyMatches(company)) {
-            System.out.println("DISPOSABLE_COMPANY_REUSED " + company);
-            return;
-          }
-          represented.click();
-          sleep(300);
-          List<SelenideElement> choices = exactSelectableCompanyChoices(company);
-          if (choices.size() > 1) {
-            throw new AssertionError("Expected exactly one visible enabled represented-company choice '"
-              + company + "', found " + choices.size());
-          }
-          if (choices.size() == 1) {
-            choices.get(0).scrollIntoView("{block:'center',inline:'center'}").click();
-            awaitRepresentedCompany(company, representedDeadline);
-            persistSessionCookies();
-            return;
-          }
+        if (representedCompanyMatches(company)) {
+          System.out.println("DISPOSABLE_COMPANY_REUSED " + company);
+          return;
         }
-        sleep(200);
+        if (switchCompanyViaMenu(company)) {
+          persistSessionCookies();
+          return;
+        }
+        sleep(500);
       }
     }
     AssertionError lastSelectError = null;
     for (int selectAttempt = 1; selectAttempt <= 3; selectAttempt++) {
       try {
-        selectObservedCompanyToRepresent(company);
+        if (!currentUrlContains("/company-selection")) {
+          if (!switchCompanyViaMenu(company)) {
+            throw new AssertionError("Switch-company flow did not establish '"
+              + company + "'; url=" + webdriver().driver().url());
+          }
+        } else {
+          selectObservedCompanyToRepresent(company);
+        }
         assertCompanyContextApplied();
         awaitRepresentedCompany(company, System.currentTimeMillis() + Configuration.timeout);
         persistSessionCookies();
         return;
       } catch (AssertionError error) {
         lastSelectError = error;
-        System.out.println("DISPOSABLE_COMPANY_SELECT_RETRY attempt=" + selectAttempt);
+        System.out.println("DISPOSABLE_COMPANY_SELECT_RETRY attempt=" + selectAttempt
+          + " url=" + webdriver().driver().url());
         if (selectAttempt < 3) {
-          refresh();
           sleep(1500);
         }
       }
     }
     throw lastSelectError;
+  }
+
+  private static boolean currentUrlContains(String fragment) {
+    String currentUrl = webdriver().driver().url();
+    return currentUrl != null && currentUrl.contains(fragment);
+  }
+
+  /**
+   * Opens the represented-company navbar dropdown, clicks "Switch company",
+   * waits for the "Switch Company" modal, and clicks the card matching the
+   * requested company (cards are anchors with stretched-link markup, same
+   * pattern as the /company-selection page). Returns true when the requested
+   * company became the active represented company.
+   */
+  private boolean switchCompanyViaMenu(String company) {
+    String wanted = normalize(company).toLowerCase(java.util.Locale.ROOT);
+    try {
+      if (representedCompanyMatches(company)) return true;
+      SelenideElement represented = $("#navbarRepresentedDropdown");
+      if (!represented.isDisplayed()) return false;
+      executeJavaScript(
+        "const dd=document.querySelector('#navbarRepresentedDropdown');"
+        + "if(dd) dd.click();");
+      sleep(600);
+      String pickResult = executeJavaScript(
+        "const menus=[...document.querySelectorAll('.dropdown-menu')]"
+        + "  .filter(function(m){return m.getClientRects().length>0 || m.classList.contains('show');});"
+        + "let items=[];"
+        + "menus.forEach(function(m){"
+        + "  [...m.querySelectorAll('a,button,[role=menuitem]')].forEach(function(e){"
+        + "    const t=(e.innerText||'').replace(/\\s+/g,' ').trim();"
+        + "    if(t.length>0) items.push({el:e,text:t});"
+        + "  });"
+        + "});"
+        + "const matches=items.filter(function(i){"
+        + "  return i.text.toLowerCase().indexOf('switch company')>=0;});"
+        + "if(matches.length>=1){matches[0].el.click();"
+        + "  return JSON.stringify({state:'clicked'});}"
+        + "return JSON.stringify({state:'nomatch',"
+        + "  items:items.map(function(i){return i.text;}).slice(0,12)});");
+      if (pickResult == null || !pickResult.contains("\"clicked\"")) {
+        System.out.println("DISPOSABLE_COMPANY_SWITCH_MENU " + pickResult);
+        return false;
+      }
+      // Modal "Switch Company / Choose who you represent" appears — pick the card.
+      // Early clicks can land before Angular hydrates, so keep re-clicking a
+      // unique card until the represented-company context actually flips.
+      long contextDeadline = System.currentTimeMillis() + Configuration.timeout;
+      String cardResult = null;
+      while (System.currentTimeMillis() < contextDeadline) {
+        if (representedCompanyMatches(company)) {
+          System.out.println("DISPOSABLE_COMPANY_SWITCH_CARD " + cardResult);
+          return true;
+        }
+        sleep(400);
+        cardResult = executeJavaScript(
+          "const wanted=arguments[0];"
+          + "const modal=document.querySelector('ngb-modal-window,.modal.show,.modal');"
+          + "if(!modal || modal.getClientRects().length===0) return JSON.stringify({state:'no-modal'});"
+          + "const links=[...modal.querySelectorAll('a.stretched-link')].filter(function(a){"
+          + "  const card=a.parentElement;"
+          + "  const text=((card&&card.innerText)||'').replace(/\\s+/g,' ').trim().toLowerCase();"
+          + "  return !!card && card.getClientRects().length>0 && text.indexOf(wanted)>=0;"
+          + "});"
+          + "if(links.length===1){links[0].click();"
+          + "  return JSON.stringify({state:'card-clicked',via:'stretched-link'});}"
+          + "const clickable=[...modal.querySelectorAll('a,button,div,li,span')].filter(function(e){"
+          + "  const t=((e.innerText||'')).replace(/\\s+/g,' ').trim().toLowerCase();"
+          + "  return t.length>0 && t.indexOf(wanted)>=0 && e.getClientRects().length>0;"
+          + "});"
+          + "if(clickable.length>0){clickable[clickable.length-1].click();"
+          + "  return JSON.stringify({state:'card-clicked',via:'text',candidates:clickable.length});}"
+          + "return JSON.stringify({state:'cards-0',observed:[...modal.querySelectorAll('a')]"
+          + "    .map(function(a){return (a.innerText||'').trim();}).filter(Boolean).slice(0,8)});",
+          wanted);
+      }
+      System.out.println("DISPOSABLE_COMPANY_SWITCH_CARD_TIMEOUT last=" + cardResult
+        + " url=" + webdriver().driver().url());
+      String modalHtml = executeJavaScript(
+        "const modal=document.querySelector('ngb-modal-window,.modal.show,.modal');"
+        + "if(!modal) return 'no-modal';"
+        + "return modal.innerHTML.replace(/\\s+/g,' ').substring(0,900);");
+      System.out.println("DISPOSABLE_COMPANY_SWITCH_MODAL_HTML " + modalHtml);
+      return false;
+    } catch (Throwable failure) {
+      System.out.println("DISPOSABLE_COMPANY_DROPDOWN_FAILED err=" + failure);
+      return false;
+    }
   }
 
   private boolean representedCompanyMatches(String expectedCompany) {
@@ -303,6 +422,20 @@ public final class DisposableDividendSteps {
         }
       } catch (Throwable ignored) {
         // The menu can rerender while the bounded selection loop is polling.
+      }
+    }
+    if (matches.isEmpty()) {
+      // Dropdown items may render extra text (reg numbers etc.) — fall back to contains
+      for (SelenideElement candidate : $("body").$$("a, button, [role=menuitem], [role=option], [role=button]")) {
+        try {
+          String text = normalize(candidate.getText());
+          if (candidate.isDisplayed() && candidate.isEnabled() && text.contains(wanted)
+              && text.length() <= wanted.length() + 40) {
+            matches.add(candidate);
+          }
+        } catch (Throwable ignored) {
+          // ignore stale candidates
+        }
       }
     }
     return matches;
@@ -330,6 +463,15 @@ public final class DisposableDividendSteps {
           .append(cookie.isHttpOnly()).append('\n');
       }
       Files.writeString(SESSION_COOKIES, serialized.toString());
+      // The customer SPA also keeps auth state in web storage — persist it so
+      // the next scenario in a fresh browser can reuse the session.
+      String storage = executeJavaScript(
+        "const ls={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);ls[k]=localStorage.getItem(k);}"
+        + "const ss={};for(let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i);ss[k]=sessionStorage.getItem(k);}"
+        + "return JSON.stringify({ls:ls,ss:ss});");
+      if (storage != null && storage.length() > 4) {
+        Files.writeString(SESSION_STORAGE, storage);
+      }
       System.out.println("DISPOSABLE_SESSION_SAVED cookies=" + webdriver().driver().getWebDriver().manage().getCookies().size());
     } catch (Exception error) {
       System.out.println("DISPOSABLE_SESSION_SAVE_FAILED " + error.getClass().getSimpleName());
@@ -355,6 +497,14 @@ public final class DisposableDividendSteps {
           webdriver().driver().getWebDriver().manage().addCookie(builder.build());
           restored++;
         } catch (Exception ignored) { }
+      }
+      if (restored > 0 && Files.isRegularFile(SESSION_STORAGE)) {
+        String storage = Files.readString(SESSION_STORAGE);
+        executeJavaScript(
+          "try{const s=JSON.parse(arguments[0]);"
+          + "Object.entries(s.ls||{}).forEach(function(e){localStorage.setItem(e[0],e[1]);});"
+          + "Object.entries(s.ss||{}).forEach(function(e){sessionStorage.setItem(e[0],e[1]);});}catch(e){}",
+          storage);
       }
       if (restored > 0) {
         refresh();
