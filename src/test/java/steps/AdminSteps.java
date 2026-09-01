@@ -93,7 +93,12 @@ public class AdminSteps {
   @Given("I am authenticated in the admin application")
   public void i_am_authenticated_in_the_admin_application() {
     adminOpen("/home");
-    long sessionDeadline = System.currentTimeMillis() + 10000;
+    // The SPA home page can take >10s to load on slow network (observed
+    // up to ~12s), so poll well past the worst case before assuming we must
+    // log in again. Can be tuned via TEST_SESSION_PROBE_MS.
+    String sessionProbeConfig = System.getenv().getOrDefault("TEST_SESSION_PROBE_MS", "30000");
+    long sessionProbeMs = Long.parseLong(sessionProbeConfig);
+    long sessionDeadline = System.currentTimeMillis() + Math.max(1000L, sessionProbeMs);
     String url = com.codeborne.selenide.WebDriverRunner.url();
     String body = "";
     boolean alreadyAuthenticated = false;

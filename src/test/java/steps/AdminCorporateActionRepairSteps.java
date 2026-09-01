@@ -1,7 +1,6 @@
 package steps;
 
 import com.codeborne.selenide.Configuration;
-import com.codeborne.selenide.FileDownloadMode;
 import com.codeborne.selenide.SelenideElement;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Then;
@@ -17,6 +16,7 @@ import java.util.Locale;
 
 import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.$;
+import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.$$;
 import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.Selenide.screenshot;
@@ -104,23 +104,49 @@ public final class AdminCorporateActionRepairSteps {
     requireDetailRoute();
     Path downloads = Path.of(Configuration.downloadsFolder).toAbsolutePath().normalize();
     clearDirectory(downloads);
-
     List<SelenideElement> controls = exactVisibleControls("Download");
-    if (controls.size() != 1) {
-      throw new AssertionError("Expected exactly one visible Download control on application detail, found " + controls.size());
-    }
-
-    FileDownloadMode previous = Configuration.fileDownload;
-    try {
-      Configuration.fileDownload = FileDownloadMode.FOLDER;
-      java.io.File file = controls.get(0).download();
-      if (file == null || !file.isFile() || file.length() == 0) {
-        throw new AssertionError("Download control did not produce a non-empty file");
+    if (controls.size() != 1) throw new AssertionError("Expected exactly one visible Download control on application detail, found " + controls.size());
+    java.util.Set<String> beforeSet = downloadSet(downloads);
+    controls.get(0).click();
+    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 30000);
+    Path downloadedFile = awaitNewDownload(downloads, beforeSet, deadline);
+    if (downloadedFile == null) throw new AssertionError("Download control click did not produce a new non-empty file in " + downloads);
+    DOWNLOADED_FILE.set(downloadedFile);
+    System.out.println("CA35_DOWNLOADED_FILE " + downloadedFile + " size=" + safeSize(downloadedFile));
+  }
+ 
+  private static java.util.Set<String> downloadSet(Path folder) {
+    java.util.Set<String> result = new java.util.HashSet<>();
+    try (var paths = Files.list(folder)) {
+      for (Path path : paths.toList()) {
+        try {
+          if (Files.isRegularFile(path)) result.add(path.getFileName().toString() + ":" + Files.size(path));
+        } catch (java.io.IOException ignored) { }
       }
-      DOWNLOADED_FILE.set(file.toPath().toAbsolutePath().normalize());
-    } finally {
-      Configuration.fileDownload = previous;
+    } catch (java.io.IOException ignored) { }
+    return result;
+  }
+ 
+  private static Path awaitNewDownload(Path folder, java.util.Set<String> beforeSet, long deadline) {
+    Path best = null;
+    while (System.currentTimeMillis() < deadline) {
+      try (var paths = Files.list(folder)) {
+        for (Path path : paths.toList()) {
+          if (Files.isRegularFile(path)) {
+            String key = path.getFileName().toString() + ":" + Files.size(path);
+            if (!beforeSet.contains(key)) { best = path; break; }
+          }
+        }
+      } catch (java.io.IOException ignored) { }
+      if (best != null) break;
+      sleep(250);
     }
+    return best;
+  }
+ 
+  private static String safeSize(Path path) {
+    try { return String.valueOf(Files.size(path)); }
+    catch (java.io.IOException e) { return "?"; }
   }
 
   @Then("the latest observed Corporate Actions application download exists")
@@ -174,6 +200,7 @@ public final class AdminCorporateActionRepairSteps {
     }
     return matches;
   }
+
 
   private static void requireDetailRoute() {
     String current = url();
