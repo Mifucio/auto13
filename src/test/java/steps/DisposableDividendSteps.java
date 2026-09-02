@@ -1040,13 +1040,38 @@ public final class DisposableDividendSteps {
 
   private void awaitSigningActivation() {
     long deadline = System.currentTimeMillis() + Configuration.timeout;
+    int reClicks = 0;
+    long nextReclickAt = System.currentTimeMillis();
+    boolean seenInitiateControl = false;
     while (System.currentTimeMillis() < deadline) {
+
       String body = $("body").shouldBe(visible).getText();
-      if (!body.contains("Signature process has not started yet")
-        || body.contains(SIGNER_FULL_NAME)
-        || !exactVisible("Sign", "button, a, [role=button]").isEmpty()) return;
+      if (visibleSignControlInAnyFrame()) return;
+      if (!body.contains("Signature process has not started yet")) {
+
+        if (System.currentTimeMillis() >= nextReclickAt) {
+
+          List<SelenideElement> initiateer = exactVisible("Initiate signing process", "button, a, [role=button]")
+            .stream().filter(this::usableSigningInitiateControl).toList();
+          if (!initiateer.isEmpty() && initiateer.get(initiateer.size() - 1).isEnabled()) {
+
+            if (seenInitiateControl) {
+              System.out.println("DISPOSABLE_INITIATE_RECLICK attempt=" + (reClicks + 1));
+              sleep(400);
+            }
+            initiateer.get(initiateer.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
+            seenInitiateControl = true;
+            reClicks = reClicks + 1;
+            nextReclickAt = System.currentTimeMillis() + 4000;
+          } else {
+            seenInitiateControl = false;
+          }
+        }
+      }
       sleep(300);
     }
+    System.out.println("INITIATE_ACTIVATION_BODY >>>" + $("body").getText() + "<<<");
+    screenshot("disposable-initiate-activation-failed-" + applicationId);
     throw new AssertionError("Initiate signing process did not activate the signing workflow; url="
       + webdriver().driver().url());
   }
@@ -1054,9 +1079,37 @@ public final class DisposableDividendSteps {
   @When("I click the Sign button for the disposable application")
   public void clickSignerSignButton() {
     List<SelenideElement> rowSign = exactVisible("Sign", "button, a, [role=button]");
-    if (rowSign.isEmpty()) throw new AssertionError("No visible Sign button to open the signing frame; url=" + webdriver().driver().url());
-    rowSign.get(rowSign.size() - 1).click();
+    if (rowSign.isEmpty()) {
+      clickVisibleSignInAnyFrame();
+    } else {
+      rowSign.get(rowSign.size() - 1).click();
+    }
     ensureSigningContext();
+  }
+
+  private void clickVisibleSignInAnyFrame() {
+
+    try {
+
+      executeJavaScript("const b=[...document.querySelectorAll('button,a,[role=button]')].filter(e=>e.offsetParent!==null && (e.innerText||'').trim().toLowerCase()==='sign'); if(b.length) b[b.length-1].click();");
+      return;
+    } catch (Throwable ignored) { }
+    var frames = $$("iframe");
+    int i = frames.size();
+    while (i > 0) {
+      i--;
+      try {
+        Selenide.switchTo().frame(i);
+        List<SelenideElement> in = exactVisible("Sign", "button, a, [role=button]");
+        if (!in.isEmpty()) {
+          in.get(in.size() - 1).click();
+          return;
+        }
+      } catch (Throwable ignored) {
+      } finally {
+        Selenide.switchTo().defaultContent();
+      }
+    }
   }
 
   @Then("the signer full name, signing date, Sign button, and document frame must be visible")
@@ -1084,13 +1137,30 @@ public final class DisposableDividendSteps {
 
   private boolean signerFormReady(String body) {
     if (body == null || !body.contains(SIGNER_FULL_NAME)) return false;
+    boolean frameVisible = false;
+    for (SelenideElement frame : $("body").$$(
+        "iframe,object,embed,[data-testid*=document],[class*=document-frame]")) {
+      if (frame.isDisplayed()) { frameVisible = true; break; }
+    }
+    return frameVisible && visibleSignControlInAnyFrame();
+  }
+
+  private boolean visibleSignControlInAnyFrame() {
     try {
-      if (exactVisible("Sign", "button, a, [role=button]").isEmpty()) return false;
-      for (SelenideElement frame : $("body").$$(
-          "iframe,object,embed,[data-testid*=document],[class*=document-frame]")) {
-        if (frame.isDisplayed()) return true;
-      }
+      if (!exactVisible("Sign", "button, a, [role=button]").isEmpty()) return true;
     } catch (Throwable ignored) { }
+    var frames = $$("iframe");
+    int i = frames.size();
+    while (i > 0) {
+      i--;
+      try {
+        Selenide.switchTo().frame(i);
+        if (!exactVisible("Sign", "button, a, [role=button]").isEmpty()) return true;
+      } catch (Throwable ignored) {
+      } finally {
+        Selenide.switchTo().defaultContent();
+      }
+    }
     return false;
   }
 
