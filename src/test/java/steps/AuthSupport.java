@@ -963,7 +963,7 @@ public final class AuthSupport {
         // company-selection SPA state. The company cards then need to re-render,
         // and the Angular auth guard often redirects back to /company-selection
         // from the reload, causing an infinite redirect cycle.
-        selectExpectedCompanyCard(expectedCompany);
+        selectCompanyCardOnSelectionPage(expectedCompany);
         System.out.println("AUTH_CUSTOMER_COMPANY_SELECTED company=" + expectedCompany);
         // IMPORTANT: Do NOT use open(expectedPath) here — a full browser reload
         // triggers Angular to re-bootstrap, its auth guard runs, and it redirects
