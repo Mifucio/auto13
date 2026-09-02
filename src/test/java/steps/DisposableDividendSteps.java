@@ -1063,6 +1063,73 @@ public final class DisposableDividendSteps {
     }
   }
 
+  private void openExactApplicationFromList(String requestedId) {
+
+
+
+    String wanted = requestedId == null ? "" : requestedId.trim();
+    if (wanted.isBlank()) return;
+    boolean located = false;
+    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 10000);
+    while (System.currentTimeMillis() < deadline) {
+
+
+
+      Object attempt = executeJavaScript(
+        "const wanted=arguments[0]; const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')]"
+          + ".filter(e=>e.offsetParent!==null);"
+          + "const hit=els.filter(e=>((e.innerText||''').trim()===wanted)||((e.innerText||''').replace(/\\\\s+/g,' ').trim()===wanted));"
+          + "if(hit.length) return hit[hit.length-1].tagName; return '';", wanted);
+      if (attempt != null && !attempt.toString().isEmpty()) {
+
+
+
+        located = true;
+        break;
+      }
+      List<SelenideElement> sfs = new ArrayList<>();
+      for (SelenideElement candidate : $$("input[type=search], input[placeholder*=earch]")) {
+        if (candidate.isDisplayed() && candidate.isEnabled()) sfs.add(candidate);
+      }
+      if (sfs.size() == 1) {
+        sfs.get(0).setValue(wanted);
+        sleep(500);
+        continue;
+      }
+      sleep(250);
+    }
+    if (located) {
+
+
+      executeJavaScript(
+        "const wanted=arguments[0]; const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')]"
+          + ".filter(e=>e.offsetParent!==null);"
+          + "const hit=els.filter(e=>((e.innerText||''').trim()===wanted)||((e.innerText||''').replace(/\\\\s+/g,' ').trim()===wanted));"
+          + "if(hit.length) hit[hit.length-1].click();", wanted);
+      awaitBodyText("Application data");
+      signDocumentOrStay();
+    } else {
+      System.out.println("DISPOSABLE_SIGNING_REOPEN_NOT_FOUND_IN_LIST id=" + wanted);
+    }
+  }
+
+  private void signDocumentOrStay() {
+
+
+
+    try {
+      List<SelenideElement> signDocument = exactVisible("Sign Document", "button,a,[role=button]");
+      if (!signDocument.isEmpty()) {
+
+        System.out.println("DISPOSABLE_SIGNING_REOPEN_DIRECT_SIGN_DOCUMENT");
+        signDocument.get(signDocument.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
+      } else {
+        System.out.println("DISPOSABLE_SIGNING_REOPEN_NO_SIGN_DOCUMENT_BTN");
+      }
+    } catch (Throwable failure) {
+      System.out.println("DISPOSABLE_SIGNING_REOPEN_SIGN_CLICK_FAILED " + failure.getClass().getSimpleName());
+    }
+  }
   private void awaitSigningActivation() {
     long deadline = System.currentTimeMillis() + Configuration.timeout;
     int reClicks = 0;
@@ -1118,38 +1185,32 @@ public final class DisposableDividendSteps {
   }
 
   private void reopenApplicationAndRetrySigning() {
-
-    System.out.println("DISPOSABLE_SIGNING_STUCK_REOPEN id=" + applicationId + " url=" + webdriver().driver().url());
+    System.out.println("DISPOSABLE_SIGNING_STUCK_REOPEN id=" + applicationId
+      + " url=" + webdriver().driver().url());
+    // User-confirmed: customer signing must return to the CA list via the SPA
+    // "Back to all" button (the raw /corporate-actions deep link rebounces
+    // the local session back to /company-selection).
     try {
-
-      open("/corporate-actions/application-form/" + applicationId);
+      List<SelenideElement> back = exactVisible("Back to all", "button,a,[role=button],span");
+      if (!back.isEmpty()) {
+        back.get(back.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
+      } else {
+        System.out.println("DISPOSABLE_SIGNING_REOPEN_NO_BACK_BUTTON");
+      }
     } catch (Throwable failure) {
       System.out.println("DISPOSABLE_SIGNING_REOPEN_NAV_FAILED " + failure.getClass().getSimpleName());
       return;
     }
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 15000);
-    while (System.currentTimeMillis() < deadline) {
+    long routeDeadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    while (System.currentTimeMillis() < routeDeadline) {
+
 
       String body = $("body").shouldBe(visible).getText();
-      if (body.contains("Sign Document") || body.contains("Signatures") || body.contains("Notify")) break;
+      if (body.contains("Create Application") || body.contains("Corporate Actions")) break;
       sleep(200);
-
     }
-    // The freshly opened draft detail usually exposes "Sign Document"  the
-    // direct Dokobit signing path. Prefer it; otherwise re-enter the Signatures
-    // tab so the initiate flow can restart in a clean state.
-    List<SelenideElement> sd = exactVisible("Sign Document", "button, a, [role=button]");
-    if (!sd.isEmpty()) {
-
-      System.out.println("DISPOSABLE_SIGNING_REOPEN_DIRECT_SIGN_DOCUMENT");
-      sd.get(sd.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
-    } else {
-      System.out.println("DISPOSABLE_SIGNING_REOPEN_VIA_TAB");
-      List<SelenideElement> sig = exactVisible("Signatures", "button, a, [role=tab], li, span");
-      if (!sig.isEmpty()) sig.get(sig.size() - 1).click();
-    }
+    openExactApplicationFromList(applicationId);
   }
-
 
 
 
