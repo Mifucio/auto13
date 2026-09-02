@@ -13,8 +13,12 @@ import org.openqa.selenium.Cookie;
 import org.openqa.selenium.Keys;
 import org.openqa.selenium.support.ui.Select;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -351,6 +355,7 @@ public final class DisposableDividendSteps {
         assertCompanyContextApplied();
         awaitRepresentedCompany(company, System.currentTimeMillis() + Configuration.timeout);
         persistSessionCookies();
+        caSettle();
         return;
       } catch (AssertionError error) {
         lastSelectError = error;
@@ -1106,16 +1111,12 @@ public final class DisposableDividendSteps {
 
 
       dumpCaListStructure("CA_LIST_AFTER_LOCATE");
-      // Open the exact application. The row's title/link may carry a different
-      // label than the numeric id; pick the clickable that carries our id either in
-      // href or in its text, preferring anchors/buttons inthe row.
-
-      executeJavaScript(
-        "const wanted=arguments[0];"
-          + "const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')].filter(e=>e.offsetParent!==null);"
-          + "const hit=els.filter(e=>((e.getAttribute('href')||'' ).indexOf('/application-form/'+wanted)>=0)||((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted));"
-          + "if(hit.length) { const h=hit[hit.length-1]; h.click(); return h.tagName+' '+h.getAttribute('href');} return '';", wanted);
+      // Open the exact application. The user clicks the row-end "Sign" BUTTON,
+      // which launches the Dokobit signing popup. Clicking the #signatures anchor
+      // only navigates to the detail tab (shows "Notify", never launches signing),
+      executeJavaScript(loadJs("ca-sign-row.js"), wanted);
       sleep(1200);
+      caSettle();
       signDocumentOrStay();
     } else {
       Object list = executeJavaScript(
@@ -1123,6 +1124,27 @@ public final class DisposableDividendSteps {
           + ".map(a=>(a.getAttribute('href')||'' )+' | '+(a.innerText||'' ).substring(0,40)).slice(0,15).join(' /// ');");
       System.out.println("DISPOSABLE_SIGNING_REOPEN_NOT_FOUND_IN_LIST id=" + wanted
         + " rows=" + list);
+    }
+  }
+
+  private void caSettle() {
+    String raw = System.getenv("CA_SETTLE_MS");
+    if (raw == null || raw.isBlank() || raw.equals("0")) return;
+    try {
+      long ms = Long.parseLong(raw);
+      if (ms <= 0) return;
+      System.out.println("DISPOSABLE_CA_SETTLE " + ms + "ms");
+      sleep(ms);
+    } catch (NumberFormatException ignored) {
+    }
+  }
+
+  private String loadJs(String name) {
+    try (InputStream in = getClass().getResourceAsStream("/js/" + name)) {
+      if (in == null) throw new IllegalStateException("missing JS resource /js/" + name);
+      return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
     }
   }
 
@@ -1145,14 +1167,7 @@ public final class DisposableDividendSteps {
     // re-renders constantly, so use JS visibility ((offsetParent!==null)) exactly
     // like the diagnostic dump; click the last one (prefer the anchor/router-link..
     try {
-      Object clicked = executeJavaScript(
-        "const els=[...document.querySelectorAll('button,a,[role=button]')].filter(e=>e.offsetParent!==null)"
-          + ".filter(e=>((e.innerText||''').replace(/\\\\s+/g,' ').trim().toLowerCase()==='sign');"
-          + "if(!els.length) return '';"
-          + "const choice=els[els.length-1];"
-          + "choice.scrollIntoView({block:'center',inline:'center'});"
-          + "choice.click();"
-          + "return choice.tagName+' '+(choice.getAttribute('href')||'');");
+      Object clicked = executeJavaScript(loadJs("ca-sign-flow.js"));
       System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICKED " + clicked);
     } catch (Throwable failure) {
       System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICK_FAILED " + failure.getClass().getSimpleName());
@@ -1261,6 +1276,7 @@ public final class DisposableDividendSteps {
       sleep(200);
     }
     openExactApplicationFromList(applicationId);
+    caSettle();
   }
 
 
@@ -1360,6 +1376,7 @@ public final class DisposableDividendSteps {
       List<SelenideElement> rowSign = exactVisible("Sign", "button, a, [role=button]");
       if (!rowSign.isEmpty()) rowSign.get(rowSign.size() - 1).click();
     }
+    caSettle();
     ensureSigningContext();
     SelenideElement credential = visibleSigningCredentialField();
     credential.setValue(phone);
@@ -1367,6 +1384,7 @@ public final class DisposableDividendSteps {
     if (signButtons.isEmpty()) signButtons = exactVisible("Sign", "button, a, [role=button], input[type=submit]");
     if (signButtons.isEmpty()) throw new AssertionError("No visible signing confirmation button");
     signButtons.get(signButtons.size() - 1).click();
+    caSettle();
   }
 
   private boolean phoneFieldNowhere() {

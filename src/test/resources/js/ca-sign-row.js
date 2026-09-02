@@ -1,0 +1,11 @@
+const wanted = arguments[0];
+const norm = t => { const s = String( t == null ? '' : t ); return s.replace( /\s+/g, ' ' ).trim(); };
+const inRow = e => { const href = norm( e.getAttribute( 'href' ) || '' ); const txt = norm( e.innerText ); return href.indexOf( '/application-form/' + wanted ) >= 0 || txt === wanted; };
+const row = [ ...document.querySelectorAll( 'tr' ) ].find( tr => [ ...tr.querySelectorAll( 'a,button,td,div,span' ) ].some( e => e.offsetParent !== null && inRow( e ) ) );
+if ( !row ) return '';
+const signBtn = [ ...row.querySelectorAll( 'button' ) ].filter( e => e.offsetParent !== null ).filter( e => norm( e.innerText ).toLowerCase() === 'sign' ).pop();
+const choice = signBtn || [ ...row.querySelectorAll( 'a,button,[role=button]' ) ].filter( e => e.offsetParent !== null && inRow( e ) ).pop();
+if ( !choice ) return '';
+choice.scrollIntoView( { 'block': 'center', 'inline': 'center' } );
+choice.click();
+return choice.tagName + ' ' + ( choice.getAttribute( 'href' ) || '' );
