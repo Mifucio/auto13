@@ -1039,6 +1039,7 @@ public final class DisposableDividendSteps {
       System.out.println("DISPOSABLE_INITIATE_CONTROL " + signingControlDescription(control));
       control.scrollIntoView("{block:'center',inline:'center'}").shouldBe(visible, enabled);
       control.click();
+      dumpSigningSurface("POST_INITIATE_IMMEDIATE");
       awaitSigningActivation();
     } else {
       System.out.println("DISPOSABLE_SIGNING_ALREADY_INITIATED");
@@ -1046,6 +1047,43 @@ public final class DisposableDividendSteps {
     awaitSignerForm();
   }
 
+  private void dumpSigningSurface(String tag) {
+      try {
+        String body = $("body").getText();
+        String[] bodyLines = body.split("\\R");
+        StringBuilder dump = new StringBuilder();
+        int shown = 0;
+        for (int idx = 0; idx < bodyLines.length && shown < 40; idx++) {
+          if (bodyLines[idx] != null) {
+            dump.append(bodyLines[idx].trim()).append(" | ");
+            shown++;
+          }
+        }
+        List<String> frames = new ArrayList<>();
+        for (SelenideElement frame : $$("iframe,object,embed,[class*=document],frame")) {
+          try {
+            frames.add(frame.getTagName() + " visible=" + frame.isDisplayed()
+              + " src=" + safe(frame.getAttribute("src")));
+          } catch (Throwable stale) { }
+        }
+        List<String> signish = new ArrayList<>();
+        for (SelenideElement el : $$("button,a,[role=button],input[type=submit],span,div")) {
+          try {
+            if (el.isDisplayed()) {
+              String txt = safe(el.getText()).trim();
+              if (txt.length() < 25 && (txt.toLowerCase().contains("sign")
+                || txt.toLowerCase().contains("phone") || txt.toLowerCase().contains("confirm"))) {
+                signish.add(el.getTagName() + ":" + txt);
+              }
+            }
+          } catch (Throwable stale) { }
+        }
+        System.out.println("SIGNING_SURFACE_" + tag + " url=" + webdriver().driver().url()
+          + " frames=" + frames + " signish=" + signish + " body=" + dump);
+      } catch (Throwable failure) {
+        System.out.println("SIGNING_SURFACE_" + tag + " FAILED " + failure.getClass().getSimpleName());
+      }
+    }
   private boolean usableSigningInitiateControl(SelenideElement control) {
     try {
       return control.isEnabled()
