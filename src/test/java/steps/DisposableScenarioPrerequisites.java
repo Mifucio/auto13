@@ -90,6 +90,7 @@ public final class DisposableScenarioPrerequisites {
       try {
         loginWithDokobitReadinessRetry();
         selectAndVerifyCompany(company);
+        CustomerRepairSteps.ensureCustomerEnglish();
         return;
       } catch (AssertionError error) {
         last = error;

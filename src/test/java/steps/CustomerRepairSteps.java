@@ -77,6 +77,17 @@ public final class CustomerRepairSteps {
     ensureCustomerEnglish();
   }
 
+
+  /** Lenient: ensures English only when the navbar language menu is actually
+   * present. Some pages (e.g. new-form deep links) do not render the navbar;
+   * the stored language preference remains English once set. */
+  static void ensureCustomerEnglishIfPresent() {
+    try {
+      SelenideElement language = $("#navbarLanguages");
+      if (!language.exists() || !language.isDisplayed()) return;
+      ensureCustomerEnglish();
+    } catch (Throwable ignored) { }
+  }
   static void ensureCustomerEnglish() {
     SelenideElement language = $("#navbarLanguages");
     long deadline = System.currentTimeMillis() + Configuration.timeout;

@@ -189,6 +189,15 @@ public final class DisposableDividendSteps {
       clearSessionCookies();
       open("/login");
     }
+    performFreshDokobitLogin();
+  }
+
+  /**
+   * Performs a fresh Dokobit Mobile ID login for the LT single-signee user, waiting
+   * for the authenticated customer context to land directly on /corporate-actions
+   * with the AutotestLtSingleSignee represented company. This is the direct
+   * Lithuanian-company pickup that avoids any navbar "Switch company" dance. */
+  private void performFreshDokobitLogin() {
     for (int attempt = 1; attempt <= 2; attempt++) {
       try {
         openDokobitProvider("Mobile ID");
@@ -217,6 +226,23 @@ public final class DisposableDividendSteps {
         open("/login");
       }
     }
+    throw new AssertionError("Fresh Dokobit login exhausted all attempts without establishing "
+      + "customer context; url=" + webdriver().driver().url());
+  }
+  /**
+   * For the LT single-signee company, never use the navbar "Switch company" modal:
+   * the LT Dokobit user fresh login lands directly in the AutotestLtSingleSignee
+   * represented-company context. Wipe the cached session and re-login fresh so the
+   * direct Lithuanian company is picked up instead of switching. */
+  private void requireDirectLithuanianCompany(String company) {
+    if (!REPRESENTED_COMPANY.equals(company))
+      throw new AssertionError("Direct-Lithuanian-company re-login requested for non-LT company '"
+        + company + "'; url=" + webdriver().driver().url());
+    System.out.println("DISPOSABLE_COMPANY_DIRECT_RELOGIN requested " + company
+      + " url " + webdriver().driver().url());
+    clearSessionCookies();
+    open("/login");
+    performFreshDokobitLogin();
   }
 
   private boolean tryBoundedCustomerContextRecovery(String currentUrl) {
@@ -276,7 +302,11 @@ public final class DisposableDividendSteps {
       }
       System.out.println("DISPOSABLE_COMPANY_CONTEXT_MISMATCH requested=" + company
         + " url=" + currentUrl);
-      // Switch via the navbar dropdown → Switch Company modal (deep-linking
+            if (REPRESENTED_COMPANY.equals(company)) {
+        requireDirectLithuanianCompany(company);
+        return;
+      }
+// Switch via the navbar dropdown → Switch Company modal (deep-linking
       // /company-selection is accessdenied while authenticated).
       if (!switchCompanyViaMenu(company)) {
         throw new AssertionError("Reused customer session could not switch represented company to '"
@@ -292,6 +322,10 @@ public final class DisposableDividendSteps {
           System.out.println("DISPOSABLE_COMPANY_REUSED " + company);
           return;
         }
+        if (REPRESENTED_COMPANY.equals(company)) {
+          requireDirectLithuanianCompany(company);
+          return;
+        }
         if (switchCompanyViaMenu(company)) {
           persistSessionCookies();
           return;
@@ -303,6 +337,10 @@ public final class DisposableDividendSteps {
     for (int selectAttempt = 1; selectAttempt <= 3; selectAttempt++) {
       try {
         if (!currentUrlContains("/company-selection")) {
+          if (REPRESENTED_COMPANY.equals(company)) {
+            requireDirectLithuanianCompany(company);
+            return;
+          }
           if (!switchCompanyViaMenu(company)) {
             throw new AssertionError("Switch-company flow did not establish '"
               + company + "'; url=" + webdriver().driver().url());
@@ -776,10 +814,23 @@ public final class DisposableDividendSteps {
     setField("For every 1 share", "1");
     setField("Ratio", "1");
     setDate("Meeting date", LocalDate.now().minusDays(7));
-    LocalDate ex = LocalDate.now().plusDays(1);
+    // Derived dates must land on business days: the settlement calendar
+    // rejects weekend date values (e.g. payment date falls on a Saturday).
+    LocalDate ex = nextBusinessDay(LocalDate.now());
+    LocalDate record = nextBusinessDay(ex);
+    LocalDate payment = nextBusinessDay(record);
     setDate("Ex-date", ex);
-    setDate("Record date", ex.plusDays(1));
-    setDate("Payment date", ex.plusDays(2));
+    setDate("Record date", record);
+    setDate("Payment date", payment);
+  }
+
+  private static LocalDate nextBusinessDay(LocalDate day) {
+    LocalDate next = day.plusDays(1);
+    while ((next.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+        || next.getDayOfWeek() == java.time.DayOfWeek.SUNDAY)) {
+      next = next.plusDays(1);
+    }
+    return next;
   }
 
   private void fillInterestPaymentForm() {
@@ -795,9 +846,11 @@ public final class DisposableDividendSteps {
     setField("Net interest amount transferred to the paying agent", "1");
     setDate("Start of interest period", LocalDate.now().minusDays(30));
     setDate("End of interest period", LocalDate.now().minusDays(1));
-    LocalDate ex = LocalDate.now().plusDays(1);
-    setDate("Record date", ex);
-    setDate("Payment date", ex.plusDays(1));
+    LocalDate ex = nextBusinessDay(LocalDate.now());
+    LocalDate record = nextBusinessDay(ex);
+    LocalDate payment = nextBusinessDay(record);
+    setDate("Record date", record);
+    setDate("Payment date", payment);
     setField("Transfer date for the amount", LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE));
     setField("Requisite details:", "Disposable test interest payment");
   }
@@ -809,7 +862,7 @@ public final class DisposableDividendSteps {
     setField("Additional nominal value (added)", "1");
     setField("Nominal Value of paid securities", "1");
     setField("Nominal Value of unpaid securities", "1");
-    setDate("Effective date", LocalDate.now().plusDays(1));
+    setDate("Effective date", nextBusinessDay(LocalDate.now()));
     fillBondsHeldTable();
   }
 
@@ -1345,8 +1398,19 @@ public final class DisposableDividendSteps {
       if ("true".equals(field.getAttribute("aria-invalid"))
         || safe(field.getAttribute("class")).toLowerCase(Locale.ROOT).contains("invalid")) {
         String hint = validationHintFor(field);
+        String dateInfo = "";
+        if ("date".equalsIgnoreCase(field.getAttribute("type"))) {
+          String min = safe(field.getAttribute("min"));
+          String max = safe(field.getAttribute("max"));
+          String val = displayValue(field);
+          Object group = executeJavaScript(
+            "const f=arguments[0]; const g=f.closest('.form-group,fieldset,div');"
+            + " return g ? g.innerText.replace(/\\s+/g,' ').trim().substring(0,180) : '';", field);
+          dateInfo = " val=\"" + val + "\" min=\"" + min + "\" max=\"" + max
+            + "\" group=\"" + String.valueOf(group == null ? "" : group).replace("\"", "'").trim() + "\"";
+        }
         invalid.add(safe(field.getAttribute("id")) + ":" + safe(field.getAttribute("name"))
-          + (hint.isEmpty() ? "" : " -> \"" + hint + "\""));
+          + dateInfo + (hint.isEmpty() ? "" : " -> \"" + hint + "\""));
       }
     }
     System.out.println("DRAFT_VALIDATION_ATTEMPT " + attempt + " invalid=" + String.join(",", invalid));
@@ -1382,6 +1446,25 @@ public final class DisposableDividendSteps {
     }
   }
 
+
+  /** Maps well-known English form labels to their stable field ids. Some
+   * generated forms render server-side translations (Latvian etc.} depending on
+   * session language, so exact label text differs per run. Field ids are
+   * language-independent, so this fallback resolves those forms robustly. */
+  private String fieldIdAliasFor(String label) {
+
+    return switch (normalize(label)) {
+      case "number of shares before" -> "bi_number_shares_before";
+      case "number of new shares" -> "bi_number_shares_new";
+      case "for every 1 share" -> "bi_for_every_one_share";
+      case "ratio" -> "bi_ratio";
+      case "meeting date" -> "bi_meeting_date";
+      case "ex-date" -> "bi_ex_date";
+      case "record date" -> "bi_record_date";
+      case "payment date" -> "bi_payment_date";
+      default -> null;
+    };
+  }
   private SelenideElement fieldForLabel(String label) {
     String literal = xpathLiteral(label.toLowerCase(Locale.ROOT));
     List<SelenideElement> labels = $$x("//*[self::label or self::legend or self::span or self::div][translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')=" + literal + "]")
@@ -1403,6 +1486,15 @@ public final class DisposableDividendSteps {
         }
       }
     }
+    // Language-agnostic fallback: field ids are stable even when generated
+    // label text renders in a different language..
+    String aliasId = fieldIdAliasFor(label);
+    if (aliasId != null) {
+      SelenideElement byId = $("#" + aliasId);
+      if (byId.exists() && byId.isDisplayed()) return byId;
+
+    }
+
     for (SelenideElement field : $$("input, textarea, select, [role=combobox]")) {
       if (!field.isDisplayed()) continue;
       String combined = String.join(" ", safe(field.getAttribute("name")), safe(field.getAttribute("id")),

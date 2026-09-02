@@ -45,6 +45,12 @@ public final class ReliableDisposableDraftRepairSteps {
   }
 
   void fillAndReliablySaveDraft(String type) throws Exception {
+    // A re-login (e.g. cached-session purge or stale-session recovery) can
+    // reset the customer SPA language back to Latvian after the normal
+    // ensureCustomerEnglish ran earlier. Re-assert English on the live form
+    // before any field is filled, so generated labels match.
+
+    CustomerRepairSteps.ensureCustomerEnglishIfPresent();
     if (DIVIDEND_PAYMENT.equalsIgnoreCase(type)) {
       flow.selectSourceInstrument();
       normalizeBlankDividendExcludedRows();
