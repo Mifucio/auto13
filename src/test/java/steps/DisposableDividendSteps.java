@@ -1200,7 +1200,7 @@ public final class DisposableDividendSteps {
 
 
 
-    dumpCaListStructure("SIGN_RETRY_VIEW");
+    dumpSigningSurface("SIGN_RETRY_VIEW");
     // The user-confirmed row-end "Sign" control appears on the CA list. Angular
     // re-renders constantly, so use JS visibility ((offsetParent!==null)) exactly
     // like the diagnostic dump; click the last one (prefer the anchor/router-link..
@@ -1231,6 +1231,24 @@ public final class DisposableDividendSteps {
         return;
       }
     } catch (Throwable ignored) { }
+    // The detail's Signatures tab may not render until re-opened;; Angular
+    // reloaded the whole application detail right after the initiate click..
+    try {
+      List<SelenideElement> signaturesTab = exactVisible("Signatures", "button,a,[role=tab],li,span");
+      if (!signaturesTab.isEmpty()) {
+        System.out.println("DISPOSABLE_SIGNING_RETAB_CLICK");
+        signaturesTab.get(signaturesTab.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
+        sleep(1500);
+        caSettle();
+      }
+    } catch (Throwable ignored2) { }
+    try {
+      SelenideElement credential2 = visibleSigningCredentialField();
+      if (credential2 != null) {
+        System.out.println("DISPOSABLE_SIGNING_RECOVERED_URL2 " + webdriver().driver().url());
+        return;
+      }
+    } catch (Throwable ignored3) { }
     // Give one settle beat; the parent loop re-detects stuck state if needed..
     sleep(1000);
   }
