@@ -1067,10 +1067,14 @@ public final class DisposableDividendSteps {
 
 
 
+
     String wanted = requestedId == null ? "" : requestedId.trim();
     if (wanted.isBlank()) return;
+    // Debug: show what the CA list actually renders so we can see the row/
+    // Sign markup (user: the latest unsigned row ends with a Sign button).
+    dumpCaListStructure("CA_LIST_ROW_STRUCTURE");
     boolean located = false;
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 10000);
+    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout,10000);
     while (System.currentTimeMillis() < deadline) {
 
 
@@ -1101,34 +1105,61 @@ public final class DisposableDividendSteps {
     if (located) {
 
 
+      dumpCaListStructure("CA_LIST_AFTER_LOCATE");
+      // Open the exact application. The row's title/link may carry a different
+      // label than the numeric id; pick the clickable that carries our id either in
+      // href or in its text, preferring anchors/buttons inthe row.
+
       executeJavaScript(
         "const wanted=arguments[0];"
           + "const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')].filter(e=>e.offsetParent!==null);"
-          + "const hit=els.filter(e=>((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted)||((e.getAttribute('href')||'' ).indexOf('/application-form/'+wanted)>=0));"
-          + "if(hit.length) hit[hit.length-1].click();", wanted);
-      awaitBodyText("Application data");
+          + "const hit=els.filter(e=>((e.getAttribute('href')||'' ).indexOf('/application-form/'+wanted)>=0)||((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted));"
+          + "if(hit.length) { const h=hit[hit.length-1]; h.click(); return h.tagName+' '+h.getAttribute('href');} return '';", wanted);
+      sleep(1200);
       signDocumentOrStay();
     } else {
       Object list = executeJavaScript(
-        "return [...document.querySelectorAll('a')].filter(a=>a.offsetParent!==null)"
+        "return [...document.querySelectorAll('a,button')].filter(a=>a.offsetParent!==null)"
           + ".map(a=>(a.getAttribute('href')||'' )+' | '+(a.innerText||'' ).substring(0,40)).slice(0,15).join(' /// ');");
       System.out.println("DISPOSABLE_SIGNING_REOPEN_NOT_FOUND_IN_LIST id=" + wanted
-        + " hrefs=" + list);
+        + " rows=" + list);
     }
+  }
+
+  private void dumpCaListStructure(String prefix) {
+
+    try {
+      Object dump = executeJavaScript(
+        "return [...document.querySelectorAll('a,button,[role=button]')].filter(e=>e.offsetParent!==null)"
+          + ".map(e=>JSON.stringify({tag:e.tagName,txt:(e.innerText||'' ).substring(0,40),href:(e.getAttribute('href')||'' ),cls:(e.className||'' ).substring(0,40)})).slice(0,20).join(' || ');");
+      System.out.println(prefix + " >>>" + dump + "<<<");
+    } catch (Throwable ignored) { }
   }
 
   private void signDocumentOrStay() {
 
 
 
+    // The freshly opened detail usually exposes "Sign Document"; otherwise the
+    // CA list row ends with a "Sign" button (user-confirmed). Click whichever
+    // renders (prefer the direct Sign Document control).
     try {
       List<SelenideElement> signDocument = exactVisible("Sign Document", "button,a,[role=button]");
       if (!signDocument.isEmpty()) {
 
+
         System.out.println("DISPOSABLE_SIGNING_REOPEN_DIRECT_SIGN_DOCUMENT");
         signDocument.get(signDocument.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
       } else {
-        System.out.println("DISPOSABLE_SIGNING_REOPEN_NO_SIGN_DOCUMENT_BTN");
+        List<SelenideElement> rowSign = exactVisible("Sign", "button,a,[role=button]");
+        if (!rowSign.isEmpty()) {
+
+
+          System.out.println("DISPOSABLE_SIGNING_REOPEN_ROW_SIGN");
+          rowSign.get(rowSign.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
+        } else {
+          System.out.println("DISPOSABLE_SIGNING_REOPEN_NO_SIGN_CTRL");
+        }
       }
     } catch (Throwable failure) {
       System.out.println("DISPOSABLE_SIGNING_REOPEN_SIGN_CLICK_FAILED " + failure.getClass().getSimpleName());
