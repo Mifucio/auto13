@@ -1076,9 +1076,9 @@ public final class DisposableDividendSteps {
 
 
       Object attempt = executeJavaScript(
-        "const wanted=arguments[0]; const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')]"
-          + ".filter(e=>e.offsetParent!==null);"
-          + "const hit=els.filter(e=>((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted));"
+        "const wanted=arguments[0];"
+          + "const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')].filter(e=>e.offsetParent!==null);"
+          + "const hit=els.filter(e=>((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted)||((e.getAttribute('href')||'' ).indexOf('/application-form/'+wanted)>=0));"
           + "if(hit.length) return hit[hit.length-1].tagName; return '';", wanted);
       if (attempt != null && !attempt.toString().isEmpty()) {
 
@@ -1102,14 +1102,18 @@ public final class DisposableDividendSteps {
 
 
       executeJavaScript(
-        "const wanted=arguments[0]; const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')]"
-          + ".filter(e=>e.offsetParent!==null);"
-          + "const hit=els.filter(e=>((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted));"
+        "const wanted=arguments[0];"
+          + "const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')].filter(e=>e.offsetParent!==null);"
+          + "const hit=els.filter(e=>((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted)||((e.getAttribute('href')||'' ).indexOf('/application-form/'+wanted)>=0));"
           + "if(hit.length) hit[hit.length-1].click();", wanted);
       awaitBodyText("Application data");
       signDocumentOrStay();
     } else {
-      System.out.println("DISPOSABLE_SIGNING_REOPEN_NOT_FOUND_IN_LIST id=" + wanted);
+      Object list = executeJavaScript(
+        "return [...document.querySelectorAll('a')].filter(a=>a.offsetParent!==null)"
+          + ".map(a=>(a.getAttribute('href')||'' )+' | '+(a.innerText||'' ).substring(0,40)).slice(0,15).join(' /// ');");
+      System.out.println("DISPOSABLE_SIGNING_REOPEN_NOT_FOUND_IN_LIST id=" + wanted
+        + " hrefs=" + list);
     }
   }
 
