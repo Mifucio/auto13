@@ -1139,25 +1139,26 @@ public final class DisposableDividendSteps {
   private void signDocumentOrStay() {
 
 
-    dumpCaListStructure("SIGN_RETRY_VIEW");
-    // From the CA list the user-clicked path is the row-end "Sign" button.
-    // Click that (prefer the button-primary control), then wait for the detail
-    // route to expose the signing frame (phone field main/iframe) rather than
-    // any "Sign Document" step..
-    try {
-      List<SelenideElement> rowSign = exactVisible("Sign", "button[class*=button-primary],button,a,[role=button]");
-      if (!rowSign.isEmpty()) {
 
-        System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICK");
-        rowSign.get(rowSign.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
-      } else {
-        System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_MISSING_ON_LIST");
-      }
+    dumpCaListStructure("SIGN_RETRY_VIEW");
+    // The user-confirmed row-end "Sign" control appears on the CA list. Angular
+    // re-renders constantly, so use JS visibility ((offsetParent!==null)) exactly
+    // like the diagnostic dump; click the last one (prefer the anchor/router-link..
+    try {
+      Object clicked = executeJavaScript(
+        "const els=[...document.querySelectorAll('button,a,[role=button]')].filter(e=>e.offsetParent!==null)"
+          + ".filter(e=>((e.innerText||''').replace(/\\\\s+/g,' ').trim().toLowerCase()==='sign');"
+          + "if(!els.length) return '';"
+          + "const choice=els[els.length-1];"
+          + "choice.scrollIntoView({block:'center',inline:'center'});"
+          + "choice.click();"
+          + "return choice.tagName+' '+(choice.getAttribute('href')||'');");
+      System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICKED " + clicked);
     } catch (Throwable failure) {
       System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICK_FAILED " + failure.getClass().getSimpleName());
     }
-    // Wait for the signatures detail route; swapping back to the list means we
-    // are still stuck  keep the loop retrying..
+    // Wait for the signatures detail route; if still on the list the loop re-detects
+    // and retries..
     long routeDeadline = System.currentTimeMillis() + 15000;
     while (System.currentTimeMillis() < routeDeadline) {
 
@@ -1166,20 +1167,19 @@ public final class DisposableDividendSteps {
       if (currentUrl != null && currentUrl.contains("#signatures")) break;
       sleep(200);
     }
-    // The signing form appears either in the main DOM or an iframe. Wait for
-    // the phone credential field which Dokobit shows  that is our true readiness.,
+    // Dokobit readiness == the phone credential field appears in main DOM or
+    // iframe. If it is there, signing is unblocked..
     try {
       SelenideElement credential = visibleSigningCredentialField();
       if (credential != null) {
+
 
         System.out.println("DISPOSABLE_SIGNING_RECOVERED_URL " + webdriver().driver().url());
         return;
       }
     } catch (Throwable ignored) { }
-    // Not yet  either the frame is pending or page bounced. Give one settle
-    // beat; the parent loop will re-detect and re-open if still stuck.
+    // Give one settle beat; the parent loop re-detects stuck state if needed..
     sleep(1000);
-
   }
   private void awaitSigningActivation() {
     long deadline = System.currentTimeMillis() + Configuration.timeout;
