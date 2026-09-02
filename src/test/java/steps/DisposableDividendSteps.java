@@ -392,10 +392,10 @@ public final class DisposableDividendSteps {
       while (System.currentTimeMillis() < deadline) {
         String url = webdriver().driver().url();
         String body = $("body").getText();
-        if (url != null && url.contains("/company-selection") && body != null
-            && body.contains("Choose who you represent")) {
+        if (url != null && url.contains("/company-selection") && !body.isEmpty() && !bodyShowsNotAuthorized()) {
           System.out.println("DISPOSABLE_COMPANY_DIRECT_SELECT requested=" + company);
-          selectObservedCompanyToRepresent(company);
+          pickCompanyCardViaJs(company);
+          awaitRepresentedCompany(company, System.currentTimeMillis() + 6000);
           return true;
         }
         if (bodyShowsNotAuthorized()) break;
@@ -410,6 +410,12 @@ public final class DisposableDividendSteps {
       System.out.println("DISPOSABLE_COMPANY_DIRECT_SELECT_FAILED " + failure.getClass().getSimpleName());
       return false;
     }
+  }
+
+  private void pickCompanyCardViaJs(String company) {
+    String wanted = normalize(company);
+    Object clicked = executeJavaScript(loadJs("ca-pick-company-card.js"), wanted);
+    System.out.println("DISPOSABLE_COMPANY_DIRECT_CARD_JS " + clicked);
   }
 
   private boolean switchCompanyViaMenu(String company) {
