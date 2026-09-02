@@ -411,6 +411,31 @@ public final class DisposableDividendSteps {
         System.out.println("DISPOSABLE_COMPANY_SWITCH_MENU " + pickResult);
         return false;
       }
+      // Direct-access preference (CA-21: the "Switch company" menu item may SPA-navigate
+      // to the /company-selection page (cards) instead of opening a modal.After Angular
+      // settles, prefer the validated BO-02 picker there; else fall back to the modal flow..
+      long uiDeadline = System.currentTimeMillis() + 4000;
+      boolean modalSeen = false;
+      while (System.currentTimeMillis() < uiDeadline) {
+        if (webdriver().driver().url().contains("/company-selection")
+            && $("body").getText().contains("Choose who you represent")) {
+          System.out.println("DISPOSABLE_COMPANY_DIRECT_PAGE url=" + webdriver().driver().url());
+          selectObservedCompanyToRepresent(company);
+          return true;
+        }
+        Object modalCheckAttr = executeJavaScript(
+          "const m=document.querySelector('ngb-modal-window,.modal.show,.modal');"
+            + "return m && m.getClientRects().length>0 ? 'yes' : 'no';");
+        if ("yes".equals(String.valueOf(modalCheckAttr))) {
+          modalSeen = true;
+          break;
+        }
+        sleep(200);
+      }
+      if (!modalSeen) {
+        System.out.println("DISPOSABLE_COMPANY_SWITCH_NEITHER_UI url=" + webdriver().driver().url());
+        return false;
+      }
       // Modal "Switch Company / Choose who you represent" appears — pick the card.
       // Early clicks can land before Angular hydrates, so keep re-clicking a
       // unique card until the represented-company context actually flips.
@@ -1267,6 +1292,7 @@ public final class DisposableDividendSteps {
     long nextReopenAt = System.currentTimeMillis();
     boolean seenInitiateControl = false;
     int retabAttempts = 0;
+    boolean refreshedAfterInitiate = false;
     while (System.currentTimeMillis() < deadline) {
 
 
@@ -1285,6 +1311,15 @@ public final class DisposableDividendSteps {
         if (!sigTab.isEmpty()) {
           sigTab.get(sigTab.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
           sleep(1500);
+        }
+        if (retabAttempts >= 1) {
+          dumpSigningSurface("RETAB_RESULT_" + retabAttempts);
+        }
+        if (!refreshedAfterInitiate && retabAttempts >= 2) {
+          refreshedAfterInitiate = true;
+          System.out.println("DISPOSABLE_SIGNING_REFRESH_AFTER_INITIATE");
+          refresh();
+          sleep(2500);
         }
         continue;
       }
@@ -1495,6 +1530,25 @@ public final class DisposableDividendSteps {
         }
         Selenide.switchTo().defaultContent();
       }
+      try {
+        if (WebDriverRunner.getWebDriver().getWindowHandles().size() > 1) {
+          for (String handle : WebDriverRunner.getWebDriver().getWindowHandles()) {
+
+
+
+            if (!handle.equals(WebDriverRunner.getWebDriver().getWindowHandle())) {
+              WebDriverRunner.getWebDriver().switchTo().window(handle);
+              if (tryVisibleSigningCredentialField() != null) {
+
+                System.out.println("DISPOSABLE_SIGNING_POPUP_CREDENTIAL_FOUND handle=" + handle);
+                return;
+              }
+              WebDriverRunner.getWebDriver().switchTo().window(
+                WebDriverRunner.getWebDriver().getWindowHandles().iterator().next());
+            }
+          }
+        }
+      } catch (Throwable ignoredWin) { }
       sleep(300);
     }
     throw new AssertionError("No phone number or Smart-ID signing field in main DOM or iframes");
