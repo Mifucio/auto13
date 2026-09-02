@@ -311,9 +311,9 @@ public final class DisposableDividendSteps {
         return;
       }
 // Switch via the navbar dropdown → Switch Company modal (deep-linking
-      // /company-selection is accessdenied while authenticated).
-      if (!switchCompanyViaMenu(company)) {
-        throw new AssertionError("Reused customer session could not switch represented company to '"
+      // Direct access: open the SPA /company-selection route and pick the company card
+      if (!tryDirectCompanySelection(company)) {
+        throw new AssertionError("Direct company selection did not establish '"
           + company + "'; url=" + webdriver().driver().url());
       }
       persistSessionCookies();
@@ -330,7 +330,7 @@ public final class DisposableDividendSteps {
           requireDirectLithuanianCompany(company);
           return;
         }
-        if (switchCompanyViaMenu(company)) {
+        if (tryDirectCompanySelection(company)) {
           persistSessionCookies();
           return;
         }
@@ -345,8 +345,8 @@ public final class DisposableDividendSteps {
             requireDirectLithuanianCompany(company);
             return;
           }
-          if (!switchCompanyViaMenu(company)) {
-            throw new AssertionError("Switch-company flow did not establish '"
+          if (!tryDirectCompanySelection(company)) {
+            throw new AssertionError("Direct company selection did not establish '"
               + company + "'; url=" + webdriver().driver().url());
           }
         } else {
@@ -381,6 +381,37 @@ public final class DisposableDividendSteps {
    * pattern as the /company-selection page). Returns true when the requested
    * company became the active represented company.
    */
+  private boolean tryDirectCompanySelection(String company) {
+    System.out.println("DISPOSABLE_COMPANY_DIRECT_ATTEMPT requested=" + company
+      + " url=" + webdriver().driver().url());
+    try {
+      String before = webdriver().driver().url();
+      open("/company-selection");
+      sleep(800);
+      long deadline = System.currentTimeMillis() + 8000;
+      while (System.currentTimeMillis() < deadline) {
+        String url = webdriver().driver().url();
+        String body = $("body").getText();
+        if (url != null && url.contains("/company-selection") && body != null
+            && body.contains("Choose who you represent")) {
+          System.out.println("DISPOSABLE_COMPANY_DIRECT_SELECT requested=" + company);
+          selectObservedCompanyToRepresent(company);
+          return true;
+        }
+        if (bodyShowsNotAuthorized()) break;
+        sleep(200);
+      }
+      System.out.println("DISPOSABLE_COMPANY_DIRECT_SELECT_UNAVAILABLE requested=" + company
+        + " url=" + webdriver().driver().url());
+      open(before);
+      sleep(500);
+      return false;
+    } catch (Throwable failure) {
+      System.out.println("DISPOSABLE_COMPANY_DIRECT_SELECT_FAILED " + failure.getClass().getSimpleName());
+      return false;
+    }
+  }
+
   private boolean switchCompanyViaMenu(String company) {
     String wanted = normalize(company).toLowerCase(java.util.Locale.ROOT);
     try {
