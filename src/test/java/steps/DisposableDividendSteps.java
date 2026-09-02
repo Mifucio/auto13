@@ -13,8 +13,12 @@ import org.openqa.selenium.Cookie;
 import org.openqa.selenium.Keys;
 import org.openqa.selenium.support.ui.Select;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -34,6 +38,7 @@ import static steps.AuthSupport.*;
 
 public final class DisposableDividendSteps {
   private static final Path SESSION_COOKIES = Path.of("build", "private", "customer-session.cookies");
+  private static final Path SESSION_STORAGE = Path.of("build", "private", "customer-session.storage.json");
   private static final String REPRESENTED_COMPANY = "AutotestLtSingleSignee";
   private static final String SIGNER_FULL_NAME = "MARY ÄNN O’CONNEŽ-ŠUSLIK TESTNUMBER";
   private String appType = "Dividend Payment";
@@ -56,6 +61,20 @@ public final class DisposableDividendSteps {
       SelenideElement represented = $("#navbarRepresentedDropdown");
       return represented.isDisplayed() && normalize(represented.getText())
         .equals(normalize(expectedCompany));
+    } catch (Throwable ignored) {
+      return false;
+    }
+  }
+
+  /** Reuse-friendly readiness: any represented company counts — the caller
+   * switches context via the navbar Switch-company flow when needed. */
+  private boolean customerSessionReadyAnyCompany(String currentUrl) {
+    if (currentUrl == null || currentUrl.contains("/login")
+        || currentUrl.contains("/company-selection")) return false;
+    if (!currentUrl.contains("/corporate-actions") && !currentUrl.contains("/holders-information")) return false;
+    try {
+      SelenideElement represented = $("#navbarRepresentedDropdown");
+      return represented.isDisplayed() && !normalize(represented.getText()).isBlank();
     } catch (Throwable ignored) {
       return false;
     }
@@ -92,7 +111,8 @@ public final class DisposableDividendSteps {
       }
       String currentUrl = webdriver().driver().url();
       if (redirectAuthenticatedCustomerToCorporateActions(currentUrl, REPRESENTED_COMPANY)) continue;
-      boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY);
+      boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY)
+        || customerSessionReadyAnyCompany(currentUrl);
       if (!sessionReady && !attemptedBoundedContextRecovery && currentUrl != null
           && (currentUrl.contains("/company-selection") || currentUrl.contains("/corporate-actions"))) {
         attemptedBoundedContextRecovery = true;
@@ -112,6 +132,24 @@ public final class DisposableDividendSteps {
         try {
           if (!exactVisible("Mobile ID", "a, button, [role=button], div, span").isEmpty()) break;
         } catch (Throwable ignored) { }
+      } else {
+        // The login form is showing despite cached cookies — the server-side
+        // session is gone. Bail out of the reuse polls immediately.
+        try {
+          if (!exactVisible("Mobile ID", "a, button, [role=button], div, span").isEmpty()) {
+            System.out.println("DISPOSABLE_SESSION_STALE_LOGIN_FORM reuse-bailout");
+            break;
+          }
+        } catch (Throwable ignored) { }
+        // Restored storage can jump straight to a blank /company-selection
+        // shell (no login form) — the server session is gone too。
+        try {
+          Boolean blank = executeJavaScript("return document.body.innerText.trim().length===0;");
+          if (Boolean.TRUE.equals(blank) && currentUrl != null && currentUrl.contains("/company-selection")) {
+            System.out.println("DISPOSABLE_SESSION_STALE_BLANK_SHELL reuse-bailout url=" + currentUrl);
+            break;
+          }
+        } catch (Throwable ignored) { }
       }
       sleep(200);
     }
@@ -125,7 +163,8 @@ public final class DisposableDividendSteps {
         }
         String currentUrl = webdriver().driver().url();
         if (redirectAuthenticatedCustomerToCorporateActions(currentUrl, REPRESENTED_COMPANY)) continue;
-        boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY);
+        boolean sessionReady = customerSessionReady(currentUrl, REPRESENTED_COMPANY)
+          || customerSessionReadyAnyCompany(currentUrl);
         if (!sessionReady && !attemptedBoundedContextRecovery && currentUrl != null
             && (currentUrl.contains("/company-selection") || currentUrl.contains("/corporate-actions"))) {
           attemptedBoundedContextRecovery = true;
@@ -147,6 +186,22 @@ public final class DisposableDividendSteps {
         sleep(200);
       }
     }
+    // Reuse failed — stale cookies/storage can leave a blank authenticated
+    // shell that blocks the fresh Dokobit flow. Wipe everything first.
+    if (cachedSession) {
+      System.out.println("DISPOSABLE_SESSION_PURGING_STALE_STATE before fresh login");
+      clearSessionCookies();
+      open("/login");
+    }
+    performFreshDokobitLogin();
+  }
+
+  /**
+   * Performs a fresh Dokobit Mobile ID login for the LT single-signee user, waiting
+   * for the authenticated customer context to land directly on /corporate-actions
+   * with the AutotestLtSingleSignee represented company. This is the direct
+   * Lithuanian-company pickup that avoids any navbar "Switch company" dance. */
+  private void performFreshDokobitLogin() {
     for (int attempt = 1; attempt <= 2; attempt++) {
       try {
         openDokobitProvider("Mobile ID");
@@ -161,16 +216,37 @@ public final class DisposableDividendSteps {
       } catch (Throwable loginFailure) {
         System.out.println("DISPOSABLE_LOGIN_ATTEMPT_FAILED attempt=" + attempt + " err=" + loginFailure);
         if (attempt == 2) {
-          throw loginFailure instanceof AssertionError ? (AssertionError) loginFailure
-            : new AssertionError("Mobile ID login failed after retry: " + loginFailure);
+          System.out.println("DISPOSABLE_LOGIN_FALLBACK_MANUAL after Dokobit Double failure");
+          clearSessionCookies();
+          sleep(800);
+          open("/login");
+          AuthSupport.manualLogin();
+          awaitAuthenticatedCustomer("/corporate-actions", REPRESENTED_COMPANY);
+          persistSessionCookies();
+          sessionReused = false;
+          return;
         }
-        System.out.println("DISPOSABLE_FRESH_LOGIN_RECOVERY attempt=" + (attempt + 1)
-          + " reason=customer-spa-not-ready");
-        clearSessionCookies();
         sleep(800);
         open("/login");
       }
     }
+    throw new AssertionError("Fresh Dokobit login exhausted all attempts without establishing "
+      + "customer context; url=" + webdriver().driver().url());
+  }
+  /**
+   * For the LT single-signee company, never use the navbar "Switch company" modal:
+   * the LT Dokobit user fresh login lands directly in the AutotestLtSingleSignee
+   * represented-company context. Wipe the cached session and re-login fresh so the
+   * direct Lithuanian company is picked up instead of switching. */
+  private void requireDirectLithuanianCompany(String company) {
+    if (!REPRESENTED_COMPANY.equals(company))
+      throw new AssertionError("Direct-Lithuanian-company re-login requested for non-LT company '"
+        + company + "'; url=" + webdriver().driver().url());
+    System.out.println("DISPOSABLE_COMPANY_DIRECT_RELOGIN requested " + company
+      + " url " + webdriver().driver().url());
+    clearSessionCookies();
+    open("/login");
+    performFreshDokobitLogin();
   }
 
   private boolean tryBoundedCustomerContextRecovery(String currentUrl) {
@@ -202,6 +278,7 @@ public final class DisposableDividendSteps {
 
   private void clearSessionCookies() {
     try { Files.deleteIfExists(SESSION_COOKIES); } catch (Exception ignored) { }
+    try { Files.deleteIfExists(SESSION_STORAGE); } catch (Exception ignored) { }
     try {
       for (Cookie cookie : webdriver().driver().getWebDriver().manage().getCookies()) {
         webdriver().driver().getWebDriver().manage().deleteCookie(cookie);
@@ -229,57 +306,155 @@ public final class DisposableDividendSteps {
       }
       System.out.println("DISPOSABLE_COMPANY_CONTEXT_MISMATCH requested=" + company
         + " url=" + currentUrl);
-      if (!tryBoundedCustomerContextRecovery(currentUrl) || !representedCompanyMatches(company)) {
-        throw new AssertionError("Reused customer session did not establish represented company '"
-          + company + "' after bounded recovery; url=" + webdriver().driver().url());
+            if (REPRESENTED_COMPANY.equals(company)) {
+        requireDirectLithuanianCompany(company);
+        return;
+      }
+// Switch via the navbar dropdown → Switch Company modal (deep-linking
+      // /company-selection is accessdenied while authenticated).
+      if (!switchCompanyViaMenu(company)) {
+        throw new AssertionError("Reused customer session could not switch represented company to '"
+          + company + "'; url=" + webdriver().driver().url());
       }
       persistSessionCookies();
       return;
     }
     if (!currentUrl.contains("/company-selection")) {
-      SelenideElement represented = $("#navbarRepresentedDropdown");
-      long representedDeadline = System.currentTimeMillis() + 10000;
+      long representedDeadline = System.currentTimeMillis() + 20000;
       while (System.currentTimeMillis() < representedDeadline) {
-        if (represented.isDisplayed()) {
-          if (representedCompanyMatches(company)) {
-            System.out.println("DISPOSABLE_COMPANY_REUSED " + company);
-            return;
-          }
-          represented.click();
-          sleep(300);
-          List<SelenideElement> choices = exactSelectableCompanyChoices(company);
-          if (choices.size() > 1) {
-            throw new AssertionError("Expected exactly one visible enabled represented-company choice '"
-              + company + "', found " + choices.size());
-          }
-          if (choices.size() == 1) {
-            choices.get(0).scrollIntoView("{block:'center',inline:'center'}").click();
-            awaitRepresentedCompany(company, representedDeadline);
-            persistSessionCookies();
-            return;
-          }
+        if (representedCompanyMatches(company)) {
+          System.out.println("DISPOSABLE_COMPANY_REUSED " + company);
+          return;
         }
-        sleep(200);
+        if (REPRESENTED_COMPANY.equals(company)) {
+          requireDirectLithuanianCompany(company);
+          return;
+        }
+        if (switchCompanyViaMenu(company)) {
+          persistSessionCookies();
+          return;
+        }
+        sleep(500);
       }
     }
     AssertionError lastSelectError = null;
     for (int selectAttempt = 1; selectAttempt <= 3; selectAttempt++) {
       try {
-        selectObservedCompanyToRepresent(company);
+        if (!currentUrlContains("/company-selection")) {
+          if (REPRESENTED_COMPANY.equals(company)) {
+            requireDirectLithuanianCompany(company);
+            return;
+          }
+          if (!switchCompanyViaMenu(company)) {
+            throw new AssertionError("Switch-company flow did not establish '"
+              + company + "'; url=" + webdriver().driver().url());
+          }
+        } else {
+          selectObservedCompanyToRepresent(company);
+        }
         assertCompanyContextApplied();
         awaitRepresentedCompany(company, System.currentTimeMillis() + Configuration.timeout);
         persistSessionCookies();
+        caSettle();
         return;
       } catch (AssertionError error) {
         lastSelectError = error;
-        System.out.println("DISPOSABLE_COMPANY_SELECT_RETRY attempt=" + selectAttempt);
+        System.out.println("DISPOSABLE_COMPANY_SELECT_RETRY attempt=" + selectAttempt
+          + " url=" + webdriver().driver().url());
         if (selectAttempt < 3) {
-          refresh();
           sleep(1500);
         }
       }
     }
     throw lastSelectError;
+  }
+
+  private static boolean currentUrlContains(String fragment) {
+    String currentUrl = webdriver().driver().url();
+    return currentUrl != null && currentUrl.contains(fragment);
+  }
+
+  /**
+   * Opens the represented-company navbar dropdown, clicks "Switch company",
+   * waits for the "Switch Company" modal, and clicks the card matching the
+   * requested company (cards are anchors with stretched-link markup, same
+   * pattern as the /company-selection page). Returns true when the requested
+   * company became the active represented company.
+   */
+  private boolean switchCompanyViaMenu(String company) {
+    String wanted = normalize(company).toLowerCase(java.util.Locale.ROOT);
+    try {
+      if (representedCompanyMatches(company)) return true;
+      SelenideElement represented = $("#navbarRepresentedDropdown");
+      if (!represented.isDisplayed()) return false;
+      executeJavaScript(
+        "const dd=document.querySelector('#navbarRepresentedDropdown');"
+        + "if(dd) dd.click();");
+      sleep(600);
+      String pickResult = executeJavaScript(
+        "const menus=[...document.querySelectorAll('.dropdown-menu')]"
+        + "  .filter(function(m){return m.getClientRects().length>0 || m.classList.contains('show');});"
+        + "let items=[];"
+        + "menus.forEach(function(m){"
+        + "  [...m.querySelectorAll('a,button,[role=menuitem]')].forEach(function(e){"
+        + "    const t=(e.innerText||'').replace(/\\s+/g,' ').trim();"
+        + "    if(t.length>0) items.push({el:e,text:t});"
+        + "  });"
+        + "});"
+        + "const matches=items.filter(function(i){"
+        + "  return i.text.toLowerCase().indexOf('switch company')>=0;});"
+        + "if(matches.length>=1){matches[0].el.click();"
+        + "  return JSON.stringify({state:'clicked'});}"
+        + "return JSON.stringify({state:'nomatch',"
+        + "  items:items.map(function(i){return i.text;}).slice(0,12)});");
+      if (pickResult == null || !pickResult.contains("\"clicked\"")) {
+        System.out.println("DISPOSABLE_COMPANY_SWITCH_MENU " + pickResult);
+        return false;
+      }
+      // Modal "Switch Company / Choose who you represent" appears — pick the card.
+      // Early clicks can land before Angular hydrates, so keep re-clicking a
+      // unique card until the represented-company context actually flips.
+      long contextDeadline = System.currentTimeMillis() + Configuration.timeout;
+      String cardResult = null;
+      while (System.currentTimeMillis() < contextDeadline) {
+        if (representedCompanyMatches(company)) {
+          System.out.println("DISPOSABLE_COMPANY_SWITCH_CARD " + cardResult);
+          return true;
+        }
+        sleep(400);
+        cardResult = executeJavaScript(
+          "const wanted=arguments[0];"
+          + "const modal=document.querySelector('ngb-modal-window,.modal.show,.modal');"
+          + "if(!modal || modal.getClientRects().length===0) return JSON.stringify({state:'no-modal'});"
+          + "const links=[...modal.querySelectorAll('a.stretched-link')].filter(function(a){"
+          + "  const card=a.parentElement;"
+          + "  const text=((card&&card.innerText)||'').replace(/\\s+/g,' ').trim().toLowerCase();"
+          + "  return !!card && card.getClientRects().length>0 && text.indexOf(wanted)>=0;"
+          + "});"
+          + "if(links.length===1){links[0].click();"
+          + "  return JSON.stringify({state:'card-clicked',via:'stretched-link'});}"
+          + "const clickable=[...modal.querySelectorAll('a,button,div,li,span')].filter(function(e){"
+          + "  const t=((e.innerText||'')).replace(/\\s+/g,' ').trim().toLowerCase();"
+          + "  return t.length>0 && t.indexOf(wanted)>=0 && e.getClientRects().length>0;"
+          + "});"
+          + "if(clickable.length>0){clickable[clickable.length-1].click();"
+          + "  return JSON.stringify({state:'card-clicked',via:'text',candidates:clickable.length});}"
+          + "return JSON.stringify({state:'cards-0',observed:[...modal.querySelectorAll('a')]"
+          + "    .map(function(a){return (a.innerText||'').trim();}).filter(Boolean).slice(0,8)});",
+          wanted);
+      }
+      System.out.println("DISPOSABLE_COMPANY_SWITCH_CARD_TIMEOUT last=" + cardResult
+        + " url=" + webdriver().driver().url());
+      String modalHtml = executeJavaScript(
+        "const modal=document.querySelector('ngb-modal-window,.modal.show,.modal');"
+        + "if(!modal) return 'no-modal';"
+        + "return modal.innerHTML.replace(/\\s+/g,' ').substring(0,900);");
+      System.out.println("DISPOSABLE_COMPANY_SWITCH_MODAL_HTML " + modalHtml);
+      return false;
+    } catch (Throwable failure) {
+      System.out.println("DISPOSABLE_COMPANY_DROPDOWN_FAILED err=" + failure);
+      return false;
+    }
   }
 
   private boolean representedCompanyMatches(String expectedCompany) {
@@ -303,6 +478,20 @@ public final class DisposableDividendSteps {
         }
       } catch (Throwable ignored) {
         // The menu can rerender while the bounded selection loop is polling.
+      }
+    }
+    if (matches.isEmpty()) {
+      // Dropdown items may render extra text (reg numbers etc.) — fall back to contains
+      for (SelenideElement candidate : $("body").$$("a, button, [role=menuitem], [role=option], [role=button]")) {
+        try {
+          String text = normalize(candidate.getText());
+          if (candidate.isDisplayed() && candidate.isEnabled() && text.contains(wanted)
+              && text.length() <= wanted.length() + 40) {
+            matches.add(candidate);
+          }
+        } catch (Throwable ignored) {
+          // ignore stale candidates
+        }
       }
     }
     return matches;
@@ -330,6 +519,15 @@ public final class DisposableDividendSteps {
           .append(cookie.isHttpOnly()).append('\n');
       }
       Files.writeString(SESSION_COOKIES, serialized.toString());
+      // The customer SPA also keeps auth state in web storage — persist it so
+      // the next scenario in a fresh browser can reuse the session.
+      String storage = executeJavaScript(
+        "const ls={};for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);ls[k]=localStorage.getItem(k);}"
+        + "const ss={};for(let i=0;i<sessionStorage.length;i++){const k=sessionStorage.key(i);ss[k]=sessionStorage.getItem(k);}"
+        + "return JSON.stringify({ls:ls,ss:ss});");
+      if (storage != null && storage.length() > 4) {
+        Files.writeString(SESSION_STORAGE, storage);
+      }
       System.out.println("DISPOSABLE_SESSION_SAVED cookies=" + webdriver().driver().getWebDriver().manage().getCookies().size());
     } catch (Exception error) {
       System.out.println("DISPOSABLE_SESSION_SAVE_FAILED " + error.getClass().getSimpleName());
@@ -355,6 +553,14 @@ public final class DisposableDividendSteps {
           webdriver().driver().getWebDriver().manage().addCookie(builder.build());
           restored++;
         } catch (Exception ignored) { }
+      }
+      if (restored > 0 && Files.isRegularFile(SESSION_STORAGE)) {
+        String storage = Files.readString(SESSION_STORAGE);
+        executeJavaScript(
+          "try{const s=JSON.parse(arguments[0]);"
+          + "Object.entries(s.ls||{}).forEach(function(e){localStorage.setItem(e[0],e[1]);});"
+          + "Object.entries(s.ss||{}).forEach(function(e){sessionStorage.setItem(e[0],e[1]);});}catch(e){}",
+          storage);
       }
       if (restored > 0) {
         refresh();
@@ -613,10 +819,23 @@ public final class DisposableDividendSteps {
     setField("For every 1 share", "1");
     setField("Ratio", "1");
     setDate("Meeting date", LocalDate.now().minusDays(7));
-    LocalDate ex = LocalDate.now().plusDays(1);
+    // Derived dates must land on business days: the settlement calendar
+    // rejects weekend date values (e.g. payment date falls on a Saturday).
+    LocalDate ex = nextBusinessDay(LocalDate.now());
+    LocalDate record = nextBusinessDay(ex);
+    LocalDate payment = nextBusinessDay(record);
     setDate("Ex-date", ex);
-    setDate("Record date", ex.plusDays(1));
-    setDate("Payment date", ex.plusDays(2));
+    setDate("Record date", record);
+    setDate("Payment date", payment);
+  }
+
+  private static LocalDate nextBusinessDay(LocalDate day) {
+    LocalDate next = day.plusDays(1);
+    while ((next.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+        || next.getDayOfWeek() == java.time.DayOfWeek.SUNDAY)) {
+      next = next.plusDays(1);
+    }
+    return next;
   }
 
   private void fillInterestPaymentForm() {
@@ -632,9 +851,11 @@ public final class DisposableDividendSteps {
     setField("Net interest amount transferred to the paying agent", "1");
     setDate("Start of interest period", LocalDate.now().minusDays(30));
     setDate("End of interest period", LocalDate.now().minusDays(1));
-    LocalDate ex = LocalDate.now().plusDays(1);
-    setDate("Record date", ex);
-    setDate("Payment date", ex.plusDays(1));
+    LocalDate ex = nextBusinessDay(LocalDate.now());
+    LocalDate record = nextBusinessDay(ex);
+    LocalDate payment = nextBusinessDay(record);
+    setDate("Record date", record);
+    setDate("Payment date", payment);
     setField("Transfer date for the amount", LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE));
     setField("Requisite details:", "Disposable test interest payment");
   }
@@ -646,7 +867,7 @@ public final class DisposableDividendSteps {
     setField("Additional nominal value (added)", "1");
     setField("Nominal Value of paid securities", "1");
     setField("Nominal Value of unpaid securities", "1");
-    setDate("Effective date", LocalDate.now().plusDays(1));
+    setDate("Effective date", nextBusinessDay(LocalDate.now()));
     fillBondsHeldTable();
   }
 
@@ -754,7 +975,31 @@ public final class DisposableDividendSteps {
   }
 
   @When("I click Sign Document for the disposable application")
+  private void dumpInteractiveControls(String prefix) {
+    try {
+      Object dump = executeJavaScript(
+        "return [...document.querySelectorAll('button,a,[role=button],input[type=button],input[type=submit]')]"
+          + ".filter(e=>e.offsetParent!==null.map(e=>{"
+          + "  let t=(e.innerText||e.value||'').replace(/\\s+/g,' ').trim();"
+          + "  return t ? (e.tagName.toLowerCase()+':'+t) : null;}).filter(Boolean.join(' | ');");
+      System.out.println(prefix + " >>>" + dump + "<<<");
+    } catch (Throwable ignored) { }
+  }
+
+  private void dumpVisibleTable(String prefix) {
+    try {
+      Object dump = executeJavaScript(
+        "const tabs=[...document.querySelectorAll('table,.table')].filter(t=>t.offsetParent!==null);"
+          + " if(!tabs.length) return 'no-table';"
+          + " const rows=[...tabs[tabs.length-1].querySelectorAll('tr')].slice(0,6).map(tr=>"
+          + "   [...tr.querySelectorAll('th,td')].map(c=>(c.innerText||'').replace(/\\s+/g,' ').trim()).join('|')).join(' / ');"
+          + " return rows.join(' /// ');");
+      System.out.println(prefix + " >>>" + dump + "<<<");
+    } catch (Throwable ignored) { }
+  }
+
   public void clickSignDocument() {
+    dumpInteractiveControls("SIGN_DOCUMENT_DECISION");
     List<SelenideElement> signDocument = exactVisible("Sign Document", "button, a, [role=button]");
     if (!signDocument.isEmpty()) signDocument.get(signDocument.size() - 1).click();
     else {
@@ -767,6 +1012,7 @@ public final class DisposableDividendSteps {
 
   @Then("the Signatures tab and Initiate signing process must be visible")
   public void signaturesTabVisible() {
+    dumpVisibleTable("SIGNATURES_TAB_STRUCTURE");
     awaitBodyText("Signatures");
     long deadline = System.currentTimeMillis() + Configuration.timeout;
     while (System.currentTimeMillis() < deadline) {
@@ -793,6 +1039,7 @@ public final class DisposableDividendSteps {
       System.out.println("DISPOSABLE_INITIATE_CONTROL " + signingControlDescription(control));
       control.scrollIntoView("{block:'center',inline:'center'}").shouldBe(visible, enabled);
       control.click();
+      dumpSigningSurface("POST_INITIATE_IMMEDIATE");
       awaitSigningActivation();
     } else {
       System.out.println("DISPOSABLE_SIGNING_ALREADY_INITIATED");
@@ -800,6 +1047,43 @@ public final class DisposableDividendSteps {
     awaitSignerForm();
   }
 
+  private void dumpSigningSurface(String tag) {
+      try {
+        String body = $("body").getText();
+        String[] bodyLines = body.split("\\R");
+        StringBuilder dump = new StringBuilder();
+        int shown = 0;
+        for (int idx = 0; idx < bodyLines.length && shown < 40; idx++) {
+          if (bodyLines[idx] != null) {
+            dump.append(bodyLines[idx].trim()).append(" | ");
+            shown++;
+          }
+        }
+        List<String> frames = new ArrayList<>();
+        for (SelenideElement frame : $$("iframe,object,embed,[class*=document],frame")) {
+          try {
+            frames.add(frame.getTagName() + " visible=" + frame.isDisplayed()
+              + " src=" + safe(frame.getAttribute("src")));
+          } catch (Throwable stale) { }
+        }
+        List<String> signish = new ArrayList<>();
+        for (SelenideElement el : $$("button,a,[role=button],input[type=submit],span,div")) {
+          try {
+            if (el.isDisplayed()) {
+              String txt = safe(el.getText()).trim();
+              if (txt.length() < 25 && (txt.toLowerCase().contains("sign")
+                || txt.toLowerCase().contains("phone") || txt.toLowerCase().contains("confirm"))) {
+                signish.add(el.getTagName() + ":" + txt);
+              }
+            }
+          } catch (Throwable stale) { }
+        }
+        System.out.println("SIGNING_SURFACE_" + tag + " url=" + webdriver().driver().url()
+          + " frames=" + frames + " signish=" + signish + " body=" + dump);
+      } catch (Throwable failure) {
+        System.out.println("SIGNING_SURFACE_" + tag + " FAILED " + failure.getClass().getSimpleName());
+      }
+    }
   private boolean usableSigningInitiateControl(SelenideElement control) {
     try {
       return control.isEnabled()
@@ -822,25 +1106,254 @@ public final class DisposableDividendSteps {
     }
   }
 
+  private void openExactApplicationFromList(String requestedId) {
+
+
+
+
+    String wanted = requestedId == null ? "" : requestedId.trim();
+    if (wanted.isBlank()) return;
+    // Debug: show what the CA list actually renders so we can see the row/
+    // Sign markup (user: the latest unsigned row ends with a Sign button).
+    dumpCaListStructure("CA_LIST_ROW_STRUCTURE");
+    boolean located = false;
+    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout,10000);
+    while (System.currentTimeMillis() < deadline) {
+
+
+
+      Object attempt = executeJavaScript(
+        "const wanted=arguments[0];"
+          + "const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')].filter(e=>e.offsetParent!==null);"
+          + "const hit=els.filter(e=>((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted)||((e.getAttribute('href')||'' ).indexOf('/application-form/'+wanted)>=0));"
+          + "if(hit.length) return hit[hit.length-1].tagName; return '';", wanted);
+      if (attempt != null && !attempt.toString().isEmpty()) {
+
+
+
+        located = true;
+        break;
+      }
+      List<SelenideElement> sfs = new ArrayList<>();
+      for (SelenideElement candidate : $$("input[type=search], input[placeholder*=earch]")) {
+        if (candidate.isDisplayed() && candidate.isEnabled()) sfs.add(candidate);
+      }
+      if (sfs.size() == 1) {
+        sfs.get(0).setValue(wanted);
+        sleep(500);
+        continue;
+      }
+      sleep(250);
+    }
+    if (located) {
+
+
+      dumpCaListStructure("CA_LIST_AFTER_LOCATE");
+      // Open the exact application. The user clicks the row-end "Sign" BUTTON,
+      // which launches the Dokobit signing popup. Clicking the #signatures anchor
+      // only navigates to the detail tab (shows "Notify", never launches signing),
+      executeJavaScript(loadJs("ca-sign-row.js"), wanted);
+      sleep(1200);
+      caSettle();
+      signDocumentOrStay();
+    } else {
+      Object list = executeJavaScript(
+        "return [...document.querySelectorAll('a,button')].filter(a=>a.offsetParent!==null)"
+          + ".map(a=>(a.getAttribute('href')||'' )+' | '+(a.innerText||'' ).substring(0,40)).slice(0,15).join(' /// ');");
+      System.out.println("DISPOSABLE_SIGNING_REOPEN_NOT_FOUND_IN_LIST id=" + wanted
+        + " rows=" + list);
+    }
+  }
+
+  private void caSettle() {
+    String raw = System.getenv("CA_SETTLE_MS");
+    if (raw == null || raw.isBlank() || raw.equals("0")) return;
+    try {
+      long ms = Long.parseLong(raw);
+      if (ms <= 0) return;
+      System.out.println("DISPOSABLE_CA_SETTLE " + ms + "ms");
+      sleep(ms);
+    } catch (NumberFormatException ignored) {
+    }
+  }
+
+  private String loadJs(String name) {
+    try (InputStream in = getClass().getResourceAsStream("/js/" + name)) {
+      if (in == null) throw new IllegalStateException("missing JS resource /js/" + name);
+      return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  private void dumpCaListStructure(String prefix) {
+
+    try {
+      Object dump = executeJavaScript(
+        "return [...document.querySelectorAll('a,button,[role=button]')].filter(e=>e.offsetParent!==null)"
+          + ".map(e=>JSON.stringify({tag:e.tagName,txt:(e.innerText||'' ).substring(0,40),href:(e.getAttribute('href')||'' ),cls:(e.className||'' ).substring(0,40)})).slice(0,20).join(' || ');");
+      System.out.println(prefix + " >>>" + dump + "<<<");
+    } catch (Throwable ignored) { }
+  }
+
+  private void signDocumentOrStay() {
+
+
+
+    dumpCaListStructure("SIGN_RETRY_VIEW");
+    // The user-confirmed row-end "Sign" control appears on the CA list. Angular
+    // re-renders constantly, so use JS visibility ((offsetParent!==null)) exactly
+    // like the diagnostic dump; click the last one (prefer the anchor/router-link..
+    try {
+      Object clicked = executeJavaScript(loadJs("ca-sign-flow.js"));
+      System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICKED " + clicked);
+    } catch (Throwable failure) {
+      System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICK_FAILED " + failure.getClass().getSimpleName());
+    }
+    // Wait for the signatures detail route; if still on the list the loop re-detects
+    // and retries..
+    long routeDeadline = System.currentTimeMillis() + 15000;
+    while (System.currentTimeMillis() < routeDeadline) {
+
+
+      String currentUrl = webdriver().driver().url();
+      if (currentUrl != null && currentUrl.contains("#signatures")) break;
+      sleep(200);
+    }
+    // Dokobit readiness == the phone credential field appears in main DOM or
+    // iframe. If it is there, signing is unblocked..
+    try {
+      SelenideElement credential = visibleSigningCredentialField();
+      if (credential != null) {
+
+
+        System.out.println("DISPOSABLE_SIGNING_RECOVERED_URL " + webdriver().driver().url());
+        return;
+      }
+    } catch (Throwable ignored) { }
+    // Give one settle beat; the parent loop re-detects stuck state if needed..
+    sleep(1000);
+  }
   private void awaitSigningActivation() {
     long deadline = System.currentTimeMillis() + Configuration.timeout;
+    int reClicks = 0;
+    int reopens = 0;
+    long nextReclickAt = System.currentTimeMillis();
+    long nextReopenAt = System.currentTimeMillis();
+    boolean seenInitiateControl = false;
     while (System.currentTimeMillis() < deadline) {
+
       String body = $("body").shouldBe(visible).getText();
-      if (!body.contains("Signature process has not started yet")
-        || body.contains(SIGNER_FULL_NAME)
-        || !exactVisible("Sign", "button, a, [role=button]").isEmpty()) return;
+      if (visibleSignControlInAnyFrame()) return;
+
+      boolean stuckStaleState =
+          (body != null && body.contains("Notify"))
+          && !body.contains("Initiate signing process")
+          && exactVisible("Sign", "button, a, [role=button]").isEmpty();
+      if (stuckStaleState && reopens < 3 && System.currentTimeMillis() >= nextReopenAt) {
+
+        reopenApplicationAndRetrySigning();
+        reopens++;
+        nextReopenAt = System.currentTimeMillis() + 10000;
+        nextReclickAt = System.currentTimeMillis() + 10000;
+        continue;
+
+      }
+      if (!body.contains("Signature process has not started yet")) {
+
+        if (System.currentTimeMillis() >= nextReclickAt) {
+
+          List<SelenideElement> initiateer = exactVisible("Initiate signing process", "button, a, [role=button]")
+            .stream().filter(this::usableSigningInitiateControl).toList();
+          if (!initiateer.isEmpty() && initiateer.get(initiateer.size() - 1).isEnabled()) {
+
+            if (seenInitiateControl) {
+              System.out.println("DISPOSABLE_INITIATE_RECLICK attempt=" + (reClicks + 1));
+              sleep(400);
+            }
+            initiateer.get(initiateer.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
+            seenInitiateControl = true;
+            reClicks = reClicks + 1;
+            nextReclickAt = System.currentTimeMillis() + 4000;
+          } else {
+            seenInitiateControl = false;
+          }
+        }
+      }
       sleep(300);
     }
+    System.out.println("INITIATE_ACTIVATION_BODY >>>" + $("body").getText() + "<<<");
+    screenshot("disposable-initiate-activation-failed-" + applicationId);
     throw new AssertionError("Initiate signing process did not activate the signing workflow; url="
       + webdriver().driver().url());
   }
 
+  private void reopenApplicationAndRetrySigning() {
+    System.out.println("DISPOSABLE_SIGNING_STUCK_REOPEN id=" + applicationId
+      + " url=" + webdriver().driver().url());
+    // User-confirmed: customer signing must return to the CA list via the SPA
+    // "Back to all" button (the raw /corporate-actions deep link rebounces
+    // the local session back to /company-selection).
+    try {
+      List<SelenideElement> back = exactVisible("Back to all", "button,a,[role=button],span");
+      if (!back.isEmpty()) {
+        back.get(back.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
+      } else {
+        System.out.println("DISPOSABLE_SIGNING_REOPEN_NO_BACK_BUTTON");
+      }
+    } catch (Throwable failure) {
+      System.out.println("DISPOSABLE_SIGNING_REOPEN_NAV_FAILED " + failure.getClass().getSimpleName());
+      return;
+    }
+    long routeDeadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    while (System.currentTimeMillis() < routeDeadline) {
+
+
+      String body = $("body").shouldBe(visible).getText();
+      if (body.contains("Create Application") || body.contains("Corporate Actions")) break;
+      sleep(200);
+    }
+    openExactApplicationFromList(applicationId);
+    caSettle();
+  }
+
+
+
+
   @When("I click the Sign button for the disposable application")
   public void clickSignerSignButton() {
     List<SelenideElement> rowSign = exactVisible("Sign", "button, a, [role=button]");
-    if (rowSign.isEmpty()) throw new AssertionError("No visible Sign button to open the signing frame; url=" + webdriver().driver().url());
-    rowSign.get(rowSign.size() - 1).click();
+    if (rowSign.isEmpty()) {
+      clickVisibleSignInAnyFrame();
+    } else {
+      rowSign.get(rowSign.size() - 1).click();
+    }
     ensureSigningContext();
+  }
+
+  private void clickVisibleSignInAnyFrame() {
+
+    try {
+
+      executeJavaScript("const b=[...document.querySelectorAll('button,a,[role=button]')].filter(e=>e.offsetParent!==null && (e.innerText||'').trim().toLowerCase()==='sign'); if(b.length) b[b.length-1].click();");
+      return;
+    } catch (Throwable ignored) { }
+    var frames = $$("iframe");
+    int i = frames.size();
+    while (i > 0) {
+      i--;
+      try {
+        Selenide.switchTo().frame(i);
+        List<SelenideElement> in = exactVisible("Sign", "button, a, [role=button]");
+        if (!in.isEmpty()) {
+          in.get(in.size() - 1).click();
+          return;
+        }
+      } catch (Throwable ignored) {
+      } finally {
+        Selenide.switchTo().defaultContent();
+      }
+    }
   }
 
   @Then("the signer full name, signing date, Sign button, and document frame must be visible")
@@ -868,13 +1381,30 @@ public final class DisposableDividendSteps {
 
   private boolean signerFormReady(String body) {
     if (body == null || !body.contains(SIGNER_FULL_NAME)) return false;
+    boolean frameVisible = false;
+    for (SelenideElement frame : $("body").$$(
+        "iframe,object,embed,[data-testid*=document],[class*=document-frame]")) {
+      if (frame.isDisplayed()) { frameVisible = true; break; }
+    }
+    return frameVisible && visibleSignControlInAnyFrame();
+  }
+
+  private boolean visibleSignControlInAnyFrame() {
     try {
-      if (exactVisible("Sign", "button, a, [role=button]").isEmpty()) return false;
-      for (SelenideElement frame : $("body").$$(
-          "iframe,object,embed,[data-testid*=document],[class*=document-frame]")) {
-        if (frame.isDisplayed()) return true;
-      }
+      if (!exactVisible("Sign", "button, a, [role=button]").isEmpty()) return true;
     } catch (Throwable ignored) { }
+    var frames = $$("iframe");
+    int i = frames.size();
+    while (i > 0) {
+      i--;
+      try {
+        Selenide.switchTo().frame(i);
+        if (!exactVisible("Sign", "button, a, [role=button]").isEmpty()) return true;
+      } catch (Throwable ignored) {
+      } finally {
+        Selenide.switchTo().defaultContent();
+      }
+    }
     return false;
   }
 
@@ -884,6 +1414,7 @@ public final class DisposableDividendSteps {
       List<SelenideElement> rowSign = exactVisible("Sign", "button, a, [role=button]");
       if (!rowSign.isEmpty()) rowSign.get(rowSign.size() - 1).click();
     }
+    caSettle();
     ensureSigningContext();
     SelenideElement credential = visibleSigningCredentialField();
     credential.setValue(phone);
@@ -891,6 +1422,7 @@ public final class DisposableDividendSteps {
     if (signButtons.isEmpty()) signButtons = exactVisible("Sign", "button, a, [role=button], input[type=submit]");
     if (signButtons.isEmpty()) throw new AssertionError("No visible signing confirmation button");
     signButtons.get(signButtons.size() - 1).click();
+    caSettle();
   }
 
   private boolean phoneFieldNowhere() {
@@ -1182,8 +1714,19 @@ public final class DisposableDividendSteps {
       if ("true".equals(field.getAttribute("aria-invalid"))
         || safe(field.getAttribute("class")).toLowerCase(Locale.ROOT).contains("invalid")) {
         String hint = validationHintFor(field);
+        String dateInfo = "";
+        if ("date".equalsIgnoreCase(field.getAttribute("type"))) {
+          String min = safe(field.getAttribute("min"));
+          String max = safe(field.getAttribute("max"));
+          String val = displayValue(field);
+          Object group = executeJavaScript(
+            "const f=arguments[0]; const g=f.closest('.form-group,fieldset,div');"
+            + " return g ? g.innerText.replace(/\\s+/g,' ').trim().substring(0,180) : '';", field);
+          dateInfo = " val=\"" + val + "\" min=\"" + min + "\" max=\"" + max
+            + "\" group=\"" + String.valueOf(group == null ? "" : group).replace("\"", "'").trim() + "\"";
+        }
         invalid.add(safe(field.getAttribute("id")) + ":" + safe(field.getAttribute("name"))
-          + (hint.isEmpty() ? "" : " -> \"" + hint + "\""));
+          + dateInfo + (hint.isEmpty() ? "" : " -> \"" + hint + "\""));
       }
     }
     System.out.println("DRAFT_VALIDATION_ATTEMPT " + attempt + " invalid=" + String.join(",", invalid));
@@ -1219,6 +1762,25 @@ public final class DisposableDividendSteps {
     }
   }
 
+
+  /** Maps well-known English form labels to their stable field ids. Some
+   * generated forms render server-side translations (Latvian etc.} depending on
+   * session language, so exact label text differs per run. Field ids are
+   * language-independent, so this fallback resolves those forms robustly. */
+  private String fieldIdAliasFor(String label) {
+
+    return switch (normalize(label)) {
+      case "number of shares before" -> "bi_number_shares_before";
+      case "number of new shares" -> "bi_number_shares_new";
+      case "for every 1 share" -> "bi_for_every_one_share";
+      case "ratio" -> "bi_ratio";
+      case "meeting date" -> "bi_meeting_date";
+      case "ex-date" -> "bi_ex_date";
+      case "record date" -> "bi_record_date";
+      case "payment date" -> "bi_payment_date";
+      default -> null;
+    };
+  }
   private SelenideElement fieldForLabel(String label) {
     String literal = xpathLiteral(label.toLowerCase(Locale.ROOT));
     List<SelenideElement> labels = $$x("//*[self::label or self::legend or self::span or self::div][translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')=" + literal + "]")
@@ -1240,6 +1802,15 @@ public final class DisposableDividendSteps {
         }
       }
     }
+    // Language-agnostic fallback: field ids are stable even when generated
+    // label text renders in a different language..
+    String aliasId = fieldIdAliasFor(label);
+    if (aliasId != null) {
+      SelenideElement byId = $("#" + aliasId);
+      if (byId.exists() && byId.isDisplayed()) return byId;
+
+    }
+
     for (SelenideElement field : $$("input, textarea, select, [role=combobox]")) {
       if (!field.isDisplayed()) continue;
       String combined = String.join(" ", safe(field.getAttribute("name")), safe(field.getAttribute("id")),

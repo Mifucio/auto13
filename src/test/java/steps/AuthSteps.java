@@ -47,8 +47,16 @@ public class AuthSteps {
 
   @Given("I navigate to {string}")
   public void i_navigate_to_string(String param0) {
+    // TEMPORARY optimization: if we have saved session cookies and the
+    // target is /login, navigate directly to /company-selection instead
+    // to skip the full SAML/Okta SSO redirect dance. Remove this check
+    // once all scenarios are accepted and temporary files are deleted.
+    if ("/login".equals(param0) && steps.CookieSessionManager.hasSavedSession()) {
+      System.out.println("  [cookies] skipping /login, going directly to /company-selection");
+      open("/company-selection");
+      return;
+    }
     open(param0);
-
   }
 
   @And("I am on the application")

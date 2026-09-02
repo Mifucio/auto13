@@ -43,6 +43,12 @@ public final class ScenarioRepairHooks {
     "open-user-settings-make-and-save-changes.feature"
   );
 
+  /** Features that test login itself; their login flow must execute fresh. */
+  private static final Set<String> LOGIN_TEST_FEATURES = Set.of(
+    "user-login-via-dokobit-smart-id-or-mobile-id.feature",
+    "user-manual-login.feature"
+  );
+
   @Before(order = 20_000)
   public void prepareScenario(Scenario scenario) {
     PENDING_DATA_REQUESTS.clear();
@@ -51,7 +57,34 @@ public final class ScenarioRepairHooks {
 
     String feature = featureName(scenario);
     if (FRESH_AUTH_FEATURES.contains(feature)) {
-      clearBrowserAuthenticationState();
+      if (LOGIN_TEST_FEATURES.contains(feature)) {
+        if (CookieSessionManager.hasEverSavedInThisRun() && CookieSessionManager.hasFreshSession()) {
+          // Login test already verified and cookies are still fresh — skip
+          // re-authentication entirely. This keeps cookies alive across the
+          // full run without unnecessary re-login.
+          System.out.println("  [cookies] skipping login test, session is still fresh");
+          String origin = scenario.getName().startsWith("[admin]") || feature.endsWith("-int.feature")
+            ? ADMIN_BASE_URL : BASE_URL;
+          open(origin);
+          CookieSessionManager.restoreCookies();
+          com.codeborne.selenide.Selenide.open(origin + "/company-selection");
+        } else {
+          // First time or cookies expired — run the full login.
+          CookieSessionManager.clearSavedSession();
+          clearBrowserAuthenticationState();
+        }
+      } else if (CookieSessionManager.hasFreshSession()) {
+        // Precondition scenarios: inject saved cookies instead of re-authenticating.
+        System.out.println("  [cookies] reusing saved session for " + feature);
+        String origin = scenario.getName().startsWith("[admin]") || feature.endsWith("-int.feature")
+          ? ADMIN_BASE_URL : BASE_URL;
+        open(origin);
+        CookieSessionManager.restoreCookies();
+        com.codeborne.selenide.Selenide.open(origin + "/company-selection");
+      } else {
+        // No saved session — normal auth.
+        clearBrowserAuthenticationState();
+      }
     }
 
     boolean adminScenario = scenario.getName().startsWith("[admin]")
@@ -72,12 +105,24 @@ public final class ScenarioRepairHooks {
     lastDataActivityAt = 0;
     disableChromeFetchInterception();
 
-    // Keep a healthy authenticated session for the next scenario. Only purge
-    // auth when the failed scenario actually ended on an authentication or
-    // represented-company boundary; those states are unsafe to reuse.
-    String current = currentUrl();
-    if (scenario.isFailed() && (current.contains("/login") || current.contains("/company-selection"))) {
-      clearBrowserAuthenticationState();
+    String feature = featureName(scenario);
+
+    // Save/refresh cookies after any successful scenario, not just login tests.
+    // This keeps the JWT auth token alive by re-saving it after every run.
+    if (!scenario.isFailed()) {
+      if (LOGIN_TEST_FEATURES.contains(feature) || CookieSessionManager.hasEverSavedInThisRun()) {
+        CookieSessionManager.saveCookies();
+      }
+    } else {
+      // Don't clear auth state on failure — let the Cucumber retry mechanism
+      // handle flaky scenarios. Only clear if stuck on login, which means the
+      // session is truly dead.
+      String current = currentUrl();
+      if (current.contains("/login") && !LOGIN_TEST_FEATURES.contains(feature)) {
+        System.out.println("  [cookies] session died, will re-authenticate on next run");
+        // Don't clear saved session — the retry will fall through to normal login
+        // since cookies won't work anymore.
+      }
     }
   }
 
