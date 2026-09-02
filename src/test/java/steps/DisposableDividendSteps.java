@@ -1138,14 +1138,14 @@ public final class DisposableDividendSteps {
     // The freshly opened draft detail usually exposes "Sign Document"  the
     // direct Dokobit signing path. Prefer it; otherwise re-enter the Signatures
     // tab so the initiate flow can restart in a clean state.
-    List<SelenideElement> sd = exactVisible("Sign Document", "button, a,, [role=button]");
+    List<SelenideElement> sd = exactVisible("Sign Document", "button, a, [role=button]");
     if (!sd.isEmpty()) {
 
       System.out.println("DISPOSABLE_SIGNING_REOPEN_DIRECT_SIGN_DOCUMENT");
       sd.get(sd.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
     } else {
       System.out.println("DISPOSABLE_SIGNING_REOPEN_VIA_TAB");
-      List<SelenideElement> sig = exactVisible("Signatures", "button, a,, [role=tab], li,, span");
+      List<SelenideElement> sig = exactVisible("Signatures", "button, a, [role=tab], li, span");
       if (!sig.isEmpty()) sig.get(sig.size() - 1).click();
     }
   }
