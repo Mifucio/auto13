@@ -1078,8 +1078,7 @@ public final class DisposableDividendSteps {
             }
           } catch (Throwable stale) { }
         }
-        System.out.println("SIGNING_SURFACE_" + tag + " url=" + webdriver().driver().url()
-          + " frames=" + frames + " signish=" + signish + " body=" + dump);
+        System.out.println("SIGNING_SURFACE_" + tag + " url=" + webdriver().driver().url() + " frames=" + frames + " signish=" + signish + " body=" + dump + " windows=" + WebDriverRunner.getWebDriver().getWindowHandles().size());
       } catch (Throwable failure) {
         System.out.println("SIGNING_SURFACE_" + tag + " FAILED " + failure.getClass().getSimpleName());
       }
@@ -1149,10 +1148,18 @@ public final class DisposableDividendSteps {
 
 
       dumpCaListStructure("CA_LIST_AFTER_LOCATE");
-      // Open the exact application. The user clicks the row-end "Sign" BUTTON,
-      // which launches the Dokobit signing popup. Clicking the #signatures anchor
-      // only navigates to the detail tab (shows "Notify", never launches signing),
-      executeJavaScript(loadJs("ca-sign-row.js"), wanted);
+      // Open the exact application. A real user click on the row-end "Sign" BUTTON
+      // launches the Dokobit signing popup. A JS (synthetic) click can be treated
+      // as untrusted and browsers silently block its popup, so use Selenium's native
+      // (trusted) click on the exact-text "Sign" button instead..
+      List<SelenideElement> rowSign = exactVisible("Sign", "button");
+      if (!rowSign.isEmpty()) {
+        SelenideElement signBtn = rowSign.get(rowSign.size() - 1);
+        System.out.println("DISPOSABLE_SIGNING_NATIVE_ROW_SIGN " + signingControlDescription(signBtn));
+        signBtn.scrollIntoView("{block:'center',inline:'center'}").shouldBe(visible, enabled).click();
+      } else {
+        System.out.println("DISPOSABLE_SIGNING_NATIVE_ROW_SIGN_MISSING");
+      }
       sleep(1200);
       caSettle();
       signDocumentOrStay();
@@ -1259,10 +1266,29 @@ public final class DisposableDividendSteps {
     long nextReclickAt = System.currentTimeMillis();
     long nextReopenAt = System.currentTimeMillis();
     boolean seenInitiateControl = false;
+    int retabAttempts = 0;
     while (System.currentTimeMillis() < deadline) {
+
 
       String body = $("body").shouldBe(visible).getText();
       if (visibleSignControlInAnyFrame()) return;
+
+
+
+      // After "Initiate signing process" the app flips to "Awaiting signatures" but may
+      // render the signer table only after re-activatingthe Signatures tab (seen empty
+      // in headed runs). Do at most two native re-clicks once the status settles..
+      if (body != null && body.contains("Awaiting signatures") && retabAttempts < 2) {
+        retabAttempts++;
+        System.out.println("DISPOSABLE_SIGNING_RETAB_FIRST attempt=" + retabAttempts);
+        List<SelenideElement> sigTab = exactVisible("Signatures", "button,a,[role=tab],li,span");
+        if (!sigTab.isEmpty()) {
+          sigTab.get(sigTab.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
+          sleep(1500);
+        }
+        continue;
+      }
+
 
       boolean stuckStaleState =
           (body != null && body.contains("Notify"))
