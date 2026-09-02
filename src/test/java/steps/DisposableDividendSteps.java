@@ -1078,7 +1078,7 @@ public final class DisposableDividendSteps {
       Object attempt = executeJavaScript(
         "const wanted=arguments[0]; const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')]"
           + ".filter(e=>e.offsetParent!==null);"
-          + "const hit=els.filter(e=>((e.innerText||''').trim()===wanted)||((e.innerText||''').replace(/\\\\s+/g,' ').trim()===wanted));"
+          + "const hit=els.filter(e=>((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted));"
           + "if(hit.length) return hit[hit.length-1].tagName; return '';", wanted);
       if (attempt != null && !attempt.toString().isEmpty()) {
 
@@ -1104,7 +1104,7 @@ public final class DisposableDividendSteps {
       executeJavaScript(
         "const wanted=arguments[0]; const els=[...document.querySelectorAll('a,button,[role=button],td,div,span')]"
           + ".filter(e=>e.offsetParent!==null);"
-          + "const hit=els.filter(e=>((e.innerText||''').trim()===wanted)||((e.innerText||''').replace(/\\\\s+/g,' ').trim()===wanted));"
+          + "const hit=els.filter(e=>((e.innerText||'' ).trim()===wanted)||((e.innerText||'' ).replace(/\\\\s+/g,' ').trim()===wanted));"
           + "if(hit.length) hit[hit.length-1].click();", wanted);
       awaitBodyText("Application data");
       signDocumentOrStay();
