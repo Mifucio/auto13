@@ -1440,31 +1440,119 @@ public final class AuthSupport {
     }
   }
 
+  static void selectCompanyCardOnSelectionPage(String company) {
+    String wanted = normalizedCompanyText(company).toLowerCase(java.util.Locale.ROOT);
+    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    int settleMs = 250;
+    boolean refreshed = false;
+    while (System.currentTimeMillis() < deadline) {
+
+      String current = WebDriverRunner.url();
+      if (current != null && !current.contains("/company-selection")) {
+        if (!current.contains("/login")) return;
+        System.out.println("AUTH_COMPANY_CARD_BOUNCE_TO_LOGIN url=" + current);
+        open("/company-selection");
+        continue;
+      }
+      int matches = countCompanyCard(wanted);
+      if (matches == 0) {
+        if (!refreshed && System.currentTimeMillis() > deadline - 5000) {
+
+          refresh();
+          refreshed = true;
+        }
+        sleep(100);
+        continue;
+      }
+      if (matches != 1) {
+        throw new AssertionError("Expected exactly one represented-company card '"
+          + company + "', found " + matches + "; observed=" + observedCompanyCards());
+      }
+      // Let Angular settle before the click: premature clicks can trigger a
+      // fatal navigation that bounces the authenticated session back to /login.
+
+
+      sleep(settleMs);
+      if (countCompanyCard(wanted) != 1) {
+        System.out.println("AUTH_COMPANY_CARD_RECLICK_RENDER company=" + company);
+        continue;
+      }
+      clickCompanyCard(wanted);
+      long navDeadline = System.currentTimeMillis() + 3500;
+      boolean leftPage = false;
+      while (System.currentTimeMillis() < navDeadline) {
+
+        String next = WebDriverRunner.url();
+        if (next != null && !next.contains("/company-selection")) {
+
+          if (!next.contains("/login")) return;
+          System.out.println("AUTH_COMPANY_CARD_BOUNCE_TO_LOGIN url=" + next);
+          open("/company-selection");
+          leftPage = true;
+          break;
+        }
+        sleep(100);
+      }
+      if (!leftPage) {
+
+        System.out.println("AUTH_COMPANY_CARD_RECLICK company=" + company + " settle=" + settleMs);
+      }
+      settleMs = Math.min(settleMs * 2, 2000);
+    }
+    throw new AssertionError("Represented-company card selection failed for '"
+      + company + "'; observed=" + observedCompanyCards() + "; url=" + WebDriverRunner.url());
+  }
+
+  private static int countCompanyCard(String wanted) {
+    int count = 0;
+    for (SelenideElement a : $$("a.stretched-link")) {
+      try {
+        if (!a.isDisplayed()) continue;
+        SelenideElement card = a.$x("..");
+        String text = card == null ? "" : card.getText();
+        if (text != null && text.toLowerCase(java.util.Locale.ROOT).contains(wanted)) count++;
+      } catch (Throwable ignored) { }
+    }
+    return count;
+  }
+
+  private static void clickCompanyCard(String wanted) {
+    for (SelenideElement a : $$("a.stretched-link")) {
+      try {
+        if (!a.isDisplayed()) continue;
+        SelenideElement card = a.$x("..");
+        String text = card == null ? "" : card.getText();
+        if (text != null && text.toLowerCase(java.util.Locale.ROOT).contains(wanted)) {
+          executeJavaScript("arguments[0].click();", a.getWrappedElement());
+          return;
+        }
+      } catch (Throwable ignored) { }
+    }
+  }
+
+  private static String observedCompanyCards() {
+    java.util.List<String> seen = new java.util.ArrayList<>();
+    for (SelenideElement a : $$("a.stretched-link")) {
+      try {
+        if (!a.isDisplayed()) continue;
+        SelenideElement card = a.$x("..");
+        String text = card == null ? "" : card.getText();
+        if (text != null && !text.isBlank()) {
+          String cleaned = text.replaceAll("\\\\s+", " ").trim();
+          seen.add(cleaned.length() <= 60 ? cleaned : cleaned.substring(0, 60));
+        }
+      } catch (Throwable ignored) { }
+    }
+    return String.join(" | ", seen);
+  }
+
   static void selectObservedCompanyToRepresent(String companyName) {
     String currentUrl = WebDriverRunner.url();
     if (!sameOrigin(currentUrl, BASE_URL) || !currentUrl.contains("/company-selection")) {
       throw new AssertionError("Expected observed company-selection route, got " + currentUrl);
     }
     $(byText("Choose who you represent")).shouldBe(visible);
-    Number matches = 0;
-    long cardsDeadline = System.currentTimeMillis() + Configuration.timeout;
-    while (System.currentTimeMillis() < cardsDeadline) {
-      matches = executeJavaScript("const wanted=arguments[0]; const links=[...document.querySelectorAll('a.stretched-link')].filter(a=>a.offsetParent!==null && (a.parentElement?.innerText||'').replace(/\\s+/g,' ').includes(wanted)); if(links.length===1) links[0].click(); return links.length;", companyName);
-      if (matches != null && matches.intValue() != 0) break;
-      sleep(100);
-    }
-    if (matches == null || matches.intValue() != 1) {
-      String inventory = executeJavaScript("return [...document.querySelectorAll('a.stretched-link')].filter(a=>a.offsetParent!==null).map(a=>(a.parentElement?.innerText||'').replace(/\\s+/g,' ').trim()).join(' | ')");
-      throw new AssertionError("Expected exactly one observed company card '" + companyName + "', found "
-        + (matches == null ? 0 : matches.intValue()) + "; observed cards=" + inventory);
-    }
-    long deadline = System.currentTimeMillis() + Configuration.timeout;
-    while (System.currentTimeMillis() < deadline) {
-      String next = WebDriverRunner.url();
-      if (sameOrigin(next, BASE_URL) && !next.contains("/company-selection") && !next.contains("/login")) return;
-      sleep(100);
-    }
-    throw new AssertionError("Observed company selection did not enter the represented company context; url=" + WebDriverRunner.url());
+    selectCompanyCardOnSelectionPage(companyName);
   }
 
   static void openObservedUserSettingsEditorWithoutSaving() {

@@ -37,39 +37,7 @@ public final class CustomerRepairSteps {
     if (current == null || !current.contains("/company-selection")) {
       throw new AssertionError("Expected company-selection route before choosing represented company, got " + current);
     }
-
-    Number matches = 0;
-    long cardsDeadline = System.currentTimeMillis() + Configuration.timeout;
-    while (System.currentTimeMillis() < cardsDeadline) {
-      matches = executeJavaScript(
-        "const wanted=String(arguments[0]).toLowerCase();"
-          + "const links=[...document.querySelectorAll('a.stretched-link')].filter(a=>{"
-          + " const card=a.parentElement;"
-          + " const text=(card?.innerText||'').replace(/\\s+/g,' ').trim().toLowerCase();"
-          + " return !!card && card.getClientRects().length>0 && text.includes(wanted);"
-          + "});"
-          + "if(links.length===1) links[0].click(); return links.length;",
-        normalize(company).toLowerCase(Locale.ROOT));
-      if (matches != null && matches.intValue() != 0) break;
-      sleep(100);
-    }
-
-    if (matches == null || matches.intValue() != 1) {
-      String observed = executeJavaScript(
-        "return [...document.querySelectorAll('a.stretched-link')].map(a=>(a.parentElement?.innerText||'')"
-          + ".replace(/\\s+/g,' ').trim()).filter(Boolean).join(' | ')");
-      throw new AssertionError("Expected exactly one represented-company card '" + company
-        + "', found " + (matches == null ? 0 : matches.intValue()) + "; observed=" + observed);
-    }
-
-    long deadline = System.currentTimeMillis() + Configuration.timeout;
-    while (System.currentTimeMillis() < deadline) {
-      String next = url();
-      if (next != null && !next.contains("/company-selection") && !next.contains("/login")) return;
-      sleep(100);
-    }
-    throw new AssertionError("Represented-company selection did not leave /company-selection for " + company
-      + "; url=" + url());
+    AuthSupport.selectCompanyCardOnSelectionPage(company);
   }
 
   @And("I ensure customer application language is English")
