@@ -970,7 +970,31 @@ public final class DisposableDividendSteps {
   }
 
   @When("I click Sign Document for the disposable application")
+  private void dumpInteractiveControls(String prefix) {
+    try {
+      Object dump = executeJavaScript(
+        "return [...document.querySelectorAll('button,a,[role=button],input[type=button],input[type=submit]')]"
+          + ".filter(e=>e.offsetParent!==null.map(e=>{"
+          + "  let t=(e.innerText||e.value||'').replace(/\\s+/g,' ').trim();"
+          + "  return t ? (e.tagName.toLowerCase()+':'+t) : null;}).filter(Boolean.join(' | ');");
+      System.out.println(prefix + " >>>" + dump + "<<<");
+    } catch (Throwable ignored) { }
+  }
+
+  private void dumpVisibleTable(String prefix) {
+    try {
+      Object dump = executeJavaScript(
+        "const tabs=[...document.querySelectorAll('table,.table')].filter(t=>t.offsetParent!==null);"
+          + " if(!tabs.length) return 'no-table';"
+          + " const rows=[...tabs[tabs.length-1].querySelectorAll('tr')].slice(0,6).map(tr=>"
+          + "   [...tr.querySelectorAll('th,td')].map(c=>(c.innerText||'').replace(/\\s+/g,' ').trim()).join('|')).join(' / ');"
+          + " return rows.join(' /// ');");
+      System.out.println(prefix + " >>>" + dump + "<<<");
+    } catch (Throwable ignored) { }
+  }
+
   public void clickSignDocument() {
+    dumpInteractiveControls("SIGN_DOCUMENT_DECISION");
     List<SelenideElement> signDocument = exactVisible("Sign Document", "button, a, [role=button]");
     if (!signDocument.isEmpty()) signDocument.get(signDocument.size() - 1).click();
     else {
@@ -983,6 +1007,7 @@ public final class DisposableDividendSteps {
 
   @Then("the Signatures tab and Initiate signing process must be visible")
   public void signaturesTabVisible() {
+    dumpVisibleTable("SIGNATURES_TAB_STRUCTURE");
     awaitBodyText("Signatures");
     long deadline = System.currentTimeMillis() + Configuration.timeout;
     while (System.currentTimeMillis() < deadline) {
@@ -1041,12 +1066,28 @@ public final class DisposableDividendSteps {
   private void awaitSigningActivation() {
     long deadline = System.currentTimeMillis() + Configuration.timeout;
     int reClicks = 0;
+    int reopens = 0;
     long nextReclickAt = System.currentTimeMillis();
+    long nextReopenAt = System.currentTimeMillis();
     boolean seenInitiateControl = false;
     while (System.currentTimeMillis() < deadline) {
 
       String body = $("body").shouldBe(visible).getText();
       if (visibleSignControlInAnyFrame()) return;
+
+      boolean stuckStaleState =
+          (body != null && body.contains("Notify"))
+          && !body.contains("Initiate signing process")
+          && exactVisible("Sign", "button, a, [role=button]").isEmpty();
+      if (stuckStaleState && reopens < 3 && System.currentTimeMillis() >= nextReopenAt) {
+
+        reopenApplicationAndRetrySigning();
+        reopens++;
+        nextReopenAt = System.currentTimeMillis() + 10000;
+        nextReclickAt = System.currentTimeMillis() + 10000;
+        continue;
+
+      }
       if (!body.contains("Signature process has not started yet")) {
 
         if (System.currentTimeMillis() >= nextReclickAt) {
@@ -1075,6 +1116,43 @@ public final class DisposableDividendSteps {
     throw new AssertionError("Initiate signing process did not activate the signing workflow; url="
       + webdriver().driver().url());
   }
+
+  private void reopenApplicationAndRetrySigning() {
+
+    System.out.println("DISPOSABLE_SIGNING_STUCK_REOPEN id=" + applicationId + " url=" + webdriver().driver().url());
+    try {
+
+      open("/corporate-actions/application-form/" + applicationId);
+    } catch (Throwable failure) {
+      System.out.println("DISPOSABLE_SIGNING_REOPEN_NAV_FAILED " + failure.getClass().getSimpleName());
+      return;
+    }
+    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 15000);
+    while (System.currentTimeMillis() < deadline) {
+
+      String body = $("body").shouldBe(visible).getText();
+      if (body.contains("Sign Document") || body.contains("Signatures") || body.contains("Notify")) break;
+      sleep(200);
+
+    }
+    // The freshly opened draft detail usually exposes "Sign Document"  the
+    // direct Dokobit signing path. Prefer it; otherwise re-enter the Signatures
+    // tab so the initiate flow can restart in a clean state.
+    List<SelenideElement> sd = exactVisible("Sign Document", "button, a,, [role=button]");
+    if (!sd.isEmpty()) {
+
+      System.out.println("DISPOSABLE_SIGNING_REOPEN_DIRECT_SIGN_DOCUMENT");
+      sd.get(sd.size() - 1).scrollIntoView("{block:'center',inline:'center'}").click();
+    } else {
+      System.out.println("DISPOSABLE_SIGNING_REOPEN_VIA_TAB");
+      List<SelenideElement> sig = exactVisible("Signatures", "button, a,, [role=tab], li,, span");
+      if (!sig.isEmpty()) sig.get(sig.size() - 1).click();
+    }
+  }
+
+
+
+
 
   @When("I click the Sign button for the disposable application")
   public void clickSignerSignButton() {
