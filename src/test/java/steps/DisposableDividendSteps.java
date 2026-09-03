@@ -10,6 +10,7 @@ import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
 import org.openqa.selenium.By;
 import org.openqa.selenium.Cookie;
+import org.openqa.selenium.ElementClickInterceptedException;
 import org.openqa.selenium.Keys;
 import org.openqa.selenium.support.ui.Select;
 
@@ -573,7 +574,14 @@ public final class DisposableDividendSteps {
 
   @When("I open Corporate Actions from the customer menu")
   public void openCorporateActions() {
-    List<SelenideElement> controls = exactVisible("Corporate Actions", "a, button, [role=button]");
+    List<SelenideElement> controls = awaitExactVisibleControls("Corporate Actions", 15000);
+    if (controls.isEmpty()) {
+      // A represented-company switch can finish before Angular rebuilds the
+      // navbar. Refresh the authenticated shell once, then require the genuine
+      // menu control rather than bypassing it with a deep link.
+      refresh();
+      controls = awaitExactVisibleControls("Corporate Actions", 15000);
+    }
     if (controls.size() != 1) {
       throw new AssertionError("Expected one interactive Corporate Actions menu control before opening, found " + controls.size());
     }
@@ -585,6 +593,17 @@ public final class DisposableDividendSteps {
     }
     openedControls.get(openedControls.size() - 1).click();
     awaitBodyText("Create Application");
+  }
+
+  private List<SelenideElement> awaitExactVisibleControls(String label, long timeoutMs) {
+    long deadline = System.currentTimeMillis() + timeoutMs;
+    List<SelenideElement> controls = List.of();
+    while (System.currentTimeMillis() < deadline) {
+      controls = exactVisible(label, "a, button, [role=button]");
+      if (!controls.isEmpty()) return controls;
+      sleep(100);
+    }
+    return controls;
   }
 
   @And("I click Create Application")
@@ -636,9 +655,24 @@ public final class DisposableDividendSteps {
   @When("I select and remember a source instrument")
   public void selectSourceInstrument() {
     SelenideElement field = sourceInstrumentControl();
-    System.out.println("SOURCE_INSTRUMENT_CONTROL tag=" + field.getTagName() + " html=" + safe(field.getAttribute("outerHTML")).replace("\n", " "));
+    System.out.println("SOURCE_INSTRUMENT_CONTROL tag=" + field.getTagName());
     if ("select".equalsIgnoreCase(field.getTagName())) {
       Select select = new Select(field.getWrappedElement());
+      var selected = select.getFirstSelectedOption();
+      String selectedValue = safe(selected.getAttribute("value")).trim();
+      String selectedText = safe(selected.getText()).trim();
+      if (!selectedValue.isBlank() && !"null".equalsIgnoreCase(selectedValue)
+          && !selectedText.toLowerCase(Locale.ROOT).contains("select an instrument")) {
+        long populatedDeadline = System.currentTimeMillis() + 4000;
+        while (System.currentTimeMillis() < populatedDeadline) {
+          if (decimalValue(fieldForLabel(sourceInstrumentPopulatedLabel())).compareTo(BigDecimal.ZERO) > 0) {
+            sourceInstrument = selectedText.isBlank() ? selectedValue : selectedText;
+            screenshot("disposable-dividend-source-instrument-selected");
+            return;
+          }
+          sleep(200);
+        }
+      }
       for (var option : select.getOptions()) {
         String value = safe(option.getAttribute("value")).trim();
         String text = safe(option.getAttribute("textContent")).trim();
@@ -654,11 +688,16 @@ public final class DisposableDividendSteps {
           }
           sleep(200);
         }
-        System.out.println("SOURCE_INSTRUMENT_WITHOUT_SHARES " + value + " " + text);
+        System.out.println("SOURCE_INSTRUMENT_WITHOUT_EXPECTED_TOTAL observed=true");
       }
       throw new AssertionError("No source instrument populated a positive Total issued shares value");
     }
-    field.click();
+    executeJavaScript("arguments[0].scrollIntoView({block:'center',inline:'center'});", field.getWrappedElement());
+    try {
+      field.click();
+    } catch (org.openqa.selenium.ElementClickInterceptedException intercepted) {
+      executeJavaScript("arguments[0].focus();", field.getWrappedElement());
+    }
     sleep(300);
     List<SelenideElement> options = $("body").$$("[role=option], [role=listbox] li, .dropdown-menu li, .dropdown-menu .dropdown-item")
       .stream().filter(SelenideElement::isDisplayed).toList();
@@ -666,7 +705,6 @@ public final class DisposableDividendSteps {
     sourceInstrument = null;
     for (SelenideElement option : options) {
       String text = option.getText().trim();
-      System.out.println("SOURCE_INSTRUMENT_OPTION " + text.replace("\n", " | "));
       if (text.isBlank() || text.toLowerCase(Locale.ROOT).contains("select an instrument")) continue;
       option.click();
       sourceInstrument = text;
@@ -743,7 +781,7 @@ public final class DisposableDividendSteps {
   @And("I set Net dividend amount transferred to paying agent to the calculated total payment amount")
   public void setNetDividendAmount() {
     requireTotal();
-    setField("Net dividend amount transferred to the paying agent", plain(totalPaymentAmount));
+    setControlById("dp_net_amount_transfered_paying_agent", plain(totalPaymentAmount));
   }
 
   @And("I add two random Excluded accounts rows")
@@ -762,8 +800,10 @@ public final class DisposableDividendSteps {
       setDate("Ex-date", exDate);
       sleep(500);
       if (!hasValidationError(fieldForLabel("Ex-date"))) {
-        if (displayValue($("#dp_record_date")).isBlank()) setDate("Record date", exDate.plusDays(1));
-        if (displayValue($("#dp_payment_date")).isBlank()) setDate("Payment date", exDate.plusDays(2));
+        LocalDate recordDate = nextBusinessDay(exDate.plusDays(1));
+        LocalDate paymentDate = nextBusinessDay(recordDate.plusDays(1));
+        setDate("Record date", recordDate);
+        setDate("Payment date", paymentDate);
         return;
       }
       last = new AssertionError("Ex-date +" + day + " day was rejected");
@@ -848,14 +888,14 @@ public final class DisposableDividendSteps {
     setField("Yearly interest rate (%)", "1");
     setField("Interest rate per period (%)", "1");
     setField("Total interest payment amount", "1");
-    setField("Net interest amount transferred to the paying agent", "1");
-    setDate("Start of interest period", LocalDate.now().minusDays(30));
-    setDate("End of interest period", LocalDate.now().minusDays(1));
+    setControlById("ip_net_amount_transfered_paying_agent", "1");
+    setNativeDateById("ip_start_date", LocalDate.now().minusDays(30));
+    setNativeDateById("ip_end_date", LocalDate.now().minusDays(1));
     LocalDate ex = nextBusinessDay(LocalDate.now());
     LocalDate record = nextBusinessDay(ex);
     LocalDate payment = nextBusinessDay(record);
-    setDate("Record date", record);
-    setDate("Payment date", payment);
+    setNativeDateById("ip_record_date", record);
+    setNativeDateById("ip_payment_date", payment);
     setField("Transfer date for the amount", LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE));
     setField("Requisite details:", "Disposable test interest payment");
   }
@@ -864,29 +904,24 @@ public final class DisposableDividendSteps {
     clickRadioInGroup("aib_proc_time", "option1");
     clickRadioInGroup("aib_paid_up", "both");
     dumpVisibleFields("AIB");
-    setField("Additional nominal value (added)", "1");
+    setField("Additional nominal value (added)", "2000");
     setField("Nominal Value of paid securities", "1");
     setField("Nominal Value of unpaid securities", "1");
     setDate("Effective date", nextBusinessDay(LocalDate.now()));
-    fillBondsHeldTable();
-  }
-
-  private void fillBondsHeldTable() {
-    SelenideElement code = $("#aib_bht_code_0");
-    if (code.exists() && code.isDisplayed() && code.getValue().isBlank()) code.setValue(randomDigits(9));
-    SelenideElement account = $("#aib_bht_account_0");
-    if (account.exists() && account.isDisplayed() && "select".equalsIgnoreCase(account.getTagName())) chooseFirstNonEmpty(account);
-    SelenideElement name = $("#aib_bht_name_0");
-    if (name.exists() && name.isDisplayed() && "select".equalsIgnoreCase(name.getTagName())) chooseFirstNonEmpty(name);
-    SelenideElement amount = $("#aib_bht_amount_of_bonds_issued_0");
-    if (amount.exists() && amount.isDisplayed() && amount.getValue().isBlank()) amount.setValue("1");
   }
 
   private void clickRadioInGroup(String name, String idContains) {
     for (SelenideElement el : $$("input[type=radio]")) {
       if (!el.isDisplayed()) continue;
       if (name.equals(safe(el.getAttribute("name"))) && safe(el.getAttribute("id")).contains(idContains)) {
-        if (!el.isSelected()) el.click();
+        if (!el.isSelected()) {
+          executeJavaScript("arguments[0].scrollIntoView({block:'center',inline:'center'});", el.getWrappedElement());
+          try {
+            el.click();
+          } catch (ElementClickInterceptedException intercepted) {
+            executeJavaScript("arguments[0].click();", el.getWrappedElement());
+          }
+        }
         sleep(200);
         return;
       }
@@ -925,9 +960,7 @@ public final class DisposableDividendSteps {
         + "source.instrument=" + sourceInstrument.replace("\n", " ") + "\n"
         + "total.payment.amount=" + plain(totalPaymentAmount) + "\n");
     screenshot("disposable-dividend-draft-saved-" + applicationId);
-    System.out.println("DISPOSABLE_APPLICATION_ID " + applicationId);
-    System.out.println("DISPOSABLE_SOURCE_INSTRUMENT " + sourceInstrument.replace("\n", " "));
-    System.out.println("DISPOSABLE_TOTAL_PAYMENT_AMOUNT " + plain(totalPaymentAmount));
+    System.out.println("DISPOSABLE_APPLICATION_CONTRACT persisted=true");
   }
 
   @Given("I open the saved disposable Dividend Payment application")
@@ -974,15 +1007,13 @@ public final class DisposableDividendSteps {
     return false;
   }
 
-  @When("I click Sign Document for the disposable application")
   private void dumpInteractiveControls(String prefix) {
     try {
       Object dump = executeJavaScript(
-        "return [...document.querySelectorAll('button,a,[role=button],input[type=button],input[type=submit]')]"
-          + ".filter(e=>e.offsetParent!==null.map(e=>{"
-          + "  let t=(e.innerText||e.value||'').replace(/\\s+/g,' ').trim();"
-          + "  return t ? (e.tagName.toLowerCase()+':'+t) : null;}).filter(Boolean.join(' | ');");
-      System.out.println(prefix + " >>>" + dump + "<<<");
+        "const visible=[...document.querySelectorAll('button,a,[role=button],input[type=button],input[type=submit]')]"
+          + ".filter(e=>e.offsetParent!==null);return JSON.stringify({count:visible.length,"
+          + "buttons:visible.filter(e=>e.tagName==='BUTTON').length,links:visible.filter(e=>e.tagName==='A').length});");
+      System.out.println(prefix + " structure=" + dump);
     } catch (Throwable ignored) { }
   }
 
@@ -991,13 +1022,14 @@ public final class DisposableDividendSteps {
       Object dump = executeJavaScript(
         "const tabs=[...document.querySelectorAll('table,.table')].filter(t=>t.offsetParent!==null);"
           + " if(!tabs.length) return 'no-table';"
-          + " const rows=[...tabs[tabs.length-1].querySelectorAll('tr')].slice(0,6).map(tr=>"
-          + "   [...tr.querySelectorAll('th,td')].map(c=>(c.innerText||'').replace(/\\s+/g,' ').trim()).join('|')).join(' / ');"
-          + " return rows.join(' /// ');");
-      System.out.println(prefix + " >>>" + dump + "<<<");
+          + " const rows=[...tabs[tabs.length-1].querySelectorAll('tr')];"
+          + " return JSON.stringify({tableCount:tabs.length,rowCount:rows.length,"
+          + "columnCount:rows.length?rows[0].querySelectorAll('th,td').length:0});");
+      System.out.println(prefix + " structure=" + dump);
     } catch (Throwable ignored) { }
   }
 
+  @When("I click Sign Document for the disposable application")
   public void clickSignDocument() {
     dumpInteractiveControls("SIGN_DOCUMENT_DECISION");
     List<SelenideElement> signDocument = exactVisible("Sign Document", "button, a, [role=button]");
@@ -1032,8 +1064,7 @@ public final class DisposableDividendSteps {
       initiate = exactVisible("Initiate signing process", "button, a, [role=button]")
         .stream().filter(this::usableSigningInitiateControl).toList();
       if (initiate.isEmpty()) {
-        throw new AssertionError("Represented-company re-selection removed the signing initiation control; url="
-          + webdriver().driver().url());
+        throw new AssertionError("Represented-company re-selection removed the signing initiation control");
       }
       SelenideElement control = initiate.get(initiate.size() - 1);
       System.out.println("DISPOSABLE_INITIATE_CONTROL " + signingControlDescription(control));
@@ -1049,37 +1080,12 @@ public final class DisposableDividendSteps {
 
   private void dumpSigningSurface(String tag) {
       try {
-        String body = $("body").getText();
-        String[] bodyLines = body.split("\\R");
-        StringBuilder dump = new StringBuilder();
-        int shown = 0;
-        for (int idx = 0; idx < bodyLines.length && shown < 40; idx++) {
-          if (bodyLines[idx] != null) {
-            dump.append(bodyLines[idx].trim()).append(" | ");
-            shown++;
-          }
-        }
-        List<String> frames = new ArrayList<>();
-        for (SelenideElement frame : $$("iframe,object,embed,[class*=document],frame")) {
-          try {
-            frames.add(frame.getTagName() + " visible=" + frame.isDisplayed()
-              + " src=" + safe(frame.getAttribute("src")));
-          } catch (Throwable stale) { }
-        }
-        List<String> signish = new ArrayList<>();
-        for (SelenideElement el : $$("button,a,[role=button],input[type=submit],span,div")) {
-          try {
-            if (el.isDisplayed()) {
-              String txt = safe(el.getText()).trim();
-              if (txt.length() < 25 && (txt.toLowerCase().contains("sign")
-                || txt.toLowerCase().contains("phone") || txt.toLowerCase().contains("confirm"))) {
-                signish.add(el.getTagName() + ":" + txt);
-              }
-            }
-          } catch (Throwable stale) { }
-        }
-        System.out.println("SIGNING_SURFACE_" + tag + " url=" + webdriver().driver().url()
-          + " frames=" + frames + " signish=" + signish + " body=" + dump);
+        Object structure = executeJavaScript(
+          "const visible=s=>[...document.querySelectorAll(s)].filter(e=>e.offsetParent!==null);"
+            + "return JSON.stringify({frames:visible('iframe,object,embed,frame').length,"
+            + "controls:visible('button,a,[role=button],input[type=submit]').length,"
+            + "forms:visible('form').length});");
+        System.out.println("SIGNING_SURFACE_" + tag + " structure=" + structure);
       } catch (Throwable failure) {
         System.out.println("SIGNING_SURFACE_" + tag + " FAILED " + failure.getClass().getSimpleName());
       }
@@ -1097,9 +1103,9 @@ public final class DisposableDividendSteps {
   private String signingControlDescription(SelenideElement control) {
     try {
       Object description = executeJavaScript(
-        "const e=arguments[0]; return JSON.stringify({tag:e.tagName,id:e.id||'',className:e.className||'',"
-          + "ariaDisabled:e.getAttribute('aria-disabled')||'',disabled:e.hasAttribute('disabled'),"
-          + "outerHTML:(e.outerHTML||'').slice(0,800)});", control);
+        "const e=arguments[0]; return JSON.stringify({tag:e.tagName,disabled:e.hasAttribute('disabled'),"
+          + "ariaDisabled:e.getAttribute('aria-disabled')==='true',hasId:Boolean(e.id),"
+          + "hasClass:Boolean(e.className)});", control);
       return safe(String.valueOf(description));
     } catch (Throwable ignored) {
       return "metadata-unavailable";
@@ -1157,11 +1163,9 @@ public final class DisposableDividendSteps {
       caSettle();
       signDocumentOrStay();
     } else {
-      Object list = executeJavaScript(
-        "return [...document.querySelectorAll('a,button')].filter(a=>a.offsetParent!==null)"
-          + ".map(a=>(a.getAttribute('href')||'' )+' | '+(a.innerText||'' ).substring(0,40)).slice(0,15).join(' /// ');");
-      System.out.println("DISPOSABLE_SIGNING_REOPEN_NOT_FOUND_IN_LIST id=" + wanted
-        + " rows=" + list);
+      Number visibleControls = executeJavaScript(
+        "return [...document.querySelectorAll('a,button')].filter(a=>a.offsetParent!==null).length;");
+      System.out.println("DISPOSABLE_SIGNING_REOPEN_NOT_FOUND_IN_LIST visible_controls=" + visibleControls);
     }
   }
 
@@ -1190,9 +1194,10 @@ public final class DisposableDividendSteps {
 
     try {
       Object dump = executeJavaScript(
-        "return [...document.querySelectorAll('a,button,[role=button]')].filter(e=>e.offsetParent!==null)"
-          + ".map(e=>JSON.stringify({tag:e.tagName,txt:(e.innerText||'' ).substring(0,40),href:(e.getAttribute('href')||'' ),cls:(e.className||'' ).substring(0,40)})).slice(0,20).join(' || ');");
-      System.out.println(prefix + " >>>" + dump + "<<<");
+        "const visible=[...document.querySelectorAll('a,button,[role=button]')].filter(e=>e.offsetParent!==null);"
+          + "return JSON.stringify({count:visible.length,links:visible.filter(e=>e.tagName==='A').length,"
+          + "buttons:visible.filter(e=>e.tagName==='BUTTON').length});");
+      System.out.println(prefix + " structure=" + dump);
     } catch (Throwable ignored) { }
   }
 
@@ -1206,7 +1211,7 @@ public final class DisposableDividendSteps {
     // like the diagnostic dump; click the last one (prefer the anchor/router-link..
     try {
       Object clicked = executeJavaScript(loadJs("ca-sign-flow.js"));
-      System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICKED " + clicked);
+      System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICKED structure=" + clicked);
     } catch (Throwable failure) {
       System.out.println("DISPOSABLE_SIGNING_ROW_SIGN_CLICK_FAILED " + failure.getClass().getSimpleName());
     }
@@ -1227,7 +1232,7 @@ public final class DisposableDividendSteps {
       if (credential != null) {
 
 
-        System.out.println("DISPOSABLE_SIGNING_RECOVERED_URL " + webdriver().driver().url());
+        System.out.println("DISPOSABLE_SIGNING_RECOVERED credential_visible=true");
         return;
       }
     } catch (Throwable ignored) { }
@@ -1235,20 +1240,29 @@ public final class DisposableDividendSteps {
     sleep(1000);
   }
   private void awaitSigningActivation() {
-    long deadline = System.currentTimeMillis() + Configuration.timeout;
+    long startedAt = System.currentTimeMillis();
+    long deadline = startedAt + Configuration.timeout;
     int reClicks = 0;
     int reopens = 0;
-    long nextReclickAt = System.currentTimeMillis();
-    long nextReopenAt = System.currentTimeMillis();
+    long nextReclickAt = startedAt + 4000;
+    long nextReopenAt = startedAt + 15000;
     boolean seenInitiateControl = false;
     while (System.currentTimeMillis() < deadline) {
 
       String body = $("body").shouldBe(visible).getText();
       if (visibleSignControlInAnyFrame()) return;
 
+      boolean awaitingSignatures = body != null
+        && (body.contains("Awaiting signatures") || body.contains("Signing in progress"));
+      if (awaitingSignatures && activateSignaturesTabIfPresent()) {
+        sleep(500);
+        continue;
+      }
+
       boolean stuckStaleState =
           (body != null && body.contains("Notify"))
           && !body.contains("Initiate signing process")
+          && !awaitingSignatures
           && exactVisible("Sign", "button, a, [role=button]").isEmpty();
       if (stuckStaleState && reopens < 3 && System.currentTimeMillis() >= nextReopenAt) {
 
@@ -1259,7 +1273,8 @@ public final class DisposableDividendSteps {
         continue;
 
       }
-      if (!body.contains("Signature process has not started yet")) {
+      if (body.contains("Signature process has not started yet")
+          || body.contains("Initiate signing process")) {
 
         if (System.currentTimeMillis() >= nextReclickAt) {
 
@@ -1282,15 +1297,26 @@ public final class DisposableDividendSteps {
       }
       sleep(300);
     }
-    System.out.println("INITIATE_ACTIVATION_BODY >>>" + $("body").getText() + "<<<");
-    screenshot("disposable-initiate-activation-failed-" + applicationId);
-    throw new AssertionError("Initiate signing process did not activate the signing workflow; url="
-      + webdriver().driver().url());
+    dumpSigningSurface("INITIATE_ACTIVATION_FAILED");
+    screenshot("disposable-initiate-activation-failed");
+    throw new AssertionError("Initiate signing process did not activate the signing workflow");
+  }
+
+  private boolean activateSignaturesTabIfPresent() {
+    String currentUrl = webdriver().driver().url();
+    if (currentUrl != null && currentUrl.contains("#signatures")) return false;
+
+    List<SelenideElement> tabs = exactVisible("Signatures", "a, button, [role=tab]");
+    if (tabs.isEmpty()) return false;
+    SelenideElement tab = tabs.get(tabs.size() - 1);
+    if (!tab.isEnabled()) return false;
+    System.out.println("DISPOSABLE_SIGNING_ACTIVATE_SIGNATURES_TAB ready=true");
+    tab.scrollIntoView("{block:'center',inline:'center'}").click();
+    return true;
   }
 
   private void reopenApplicationAndRetrySigning() {
-    System.out.println("DISPOSABLE_SIGNING_STUCK_REOPEN id=" + applicationId
-      + " url=" + webdriver().driver().url());
+    System.out.println("DISPOSABLE_SIGNING_STUCK_REOPEN triggered=true");
     // User-confirmed: customer signing must return to the CA list via the SPA
     // "Back to all" button (the raw /corporate-actions deep link rebounces
     // the local session back to /company-selection).
@@ -1369,14 +1395,13 @@ public final class DisposableDividendSteps {
         lastBody = $("body").shouldBe(visible).getText();
       } catch (Throwable ignored) { }
       if (signerFormReady(lastBody)) {
-        screenshot("disposable-dividend-signing-form-" + applicationId);
+        screenshot("disposable-dividend-signing-form");
         return;
       }
       sleep(300);
     }
-    System.out.println("SIGNING_FORM_BODY_LAST >>>" + lastBody + "<<<");
-    throw new AssertionError("Signing process did not render the signer form, exact Sign control, and document frame; url="
-      + webdriver().driver().url());
+    dumpSigningSurface("SIGNING_FORM_FAILED");
+    throw new AssertionError("Signing process did not render the signer form, exact Sign control, and document frame");
   }
 
   private boolean signerFormReady(String body) {
@@ -1463,6 +1488,7 @@ public final class DisposableDividendSteps {
   @Then("Signature is valid must appear within 120 seconds")
   public void signatureIsValid() {
     long deadline = System.currentTimeMillis() + 120000;
+    boolean openedSignatureView = false;
     while (System.currentTimeMillis() < deadline) {
       String all = bodyTextIncludingFrames();
       String mainBody = $("body").getText();
@@ -1472,10 +1498,19 @@ public final class DisposableDividendSteps {
         screenshot("disposable-dividend-signature-valid-" + applicationId);
         return;
       }
+      if (!openedSignatureView && mainBody.contains("Awaiting signatures")) {
+        List<SelenideElement> views = exactVisible("View", "button, a, [role=button]");
+        if (!views.isEmpty()) {
+          views.get(views.size() - 1).click();
+          openedSignatureView = true;
+          sleep(500);
+          continue;
+        }
+      }
       sleep(500);
     }
-    System.out.println("SIGN_VALID_MAIN_BODY >>>" + $("body").getText() + "<<<");
-    throw new AssertionError("Signature is valid / Submitted did not appear within 120 seconds; url=" + webdriver().driver().url());
+    dumpSigningSurface("SIGNATURE_VALIDATION_FAILED");
+    throw new AssertionError("Signature is valid / Submitted did not appear within 120 seconds");
   }
 
   private String bodyTextIncludingFrames() {
@@ -1499,7 +1534,10 @@ public final class DisposableDividendSteps {
     long started = System.currentTimeMillis();
     List<SelenideElement> controls = exactVisible("Download", "button, a, [role=button]");
     if (controls.isEmpty()) throw new AssertionError("No visible Download control after valid signature");
-    controls.get(controls.size() - 1).click();
+    SelenideElement control = controls.get(controls.size() - 1);
+    executeJavaScript(
+      "arguments[0].scrollIntoView({block:'center',inline:'center'}); arguments[0].click();",
+      control.getWrappedElement());
     long deadline = System.currentTimeMillis() + 30000;
     while (System.currentTimeMillis() < deadline) {
       try (Stream<Path> files = Files.list(downloads)) {
@@ -1559,21 +1597,21 @@ public final class DisposableDividendSteps {
       boolean created = presence[0];
       boolean signed = presence[1];
       if (created && (!applicationSigned || signed)) {
-        System.out.println("DISPOSABLE_HISTORY_OK applicationId=" + applicationId
-          + " signed=" + applicationSigned + " createdRecord=" + created + " signedRecord=" + signed);
-        screenshot("disposable-dividend-history-" + applicationId);
+        System.out.println("DISPOSABLE_HISTORY_OK signed=" + applicationSigned
+          + " createdRecord=" + created + " signedRecord=" + signed);
+        screenshot("disposable-dividend-history");
         return;
       }
       sleep(250);
     }
-    System.out.println("DISPOSABLE_HISTORY_LAST applicationId=" + applicationId + " signed=" + applicationSigned);
+    System.out.println("DISPOSABLE_HISTORY_LAST signed=" + applicationSigned);
     try {
       Object dump = executeJavaScript(
         "const els=[...document.querySelectorAll('td,tr,div,span,li,p,dt,dd,th')].filter(e=>e.offsetParent!==null);"
-          + "return JSON.stringify(els.map(e=>(e.textContent||'').trim()).filter(t=>t.length>0&&t.length<120));");
-      System.out.println("DISPOSABLE_HISTORY_TEXT " + dump);
+          + "return JSON.stringify({visibleNodes:els.length,tableRows:document.querySelectorAll('table tr').length});");
+      System.out.println("DISPOSABLE_HISTORY_STRUCTURE " + dump);
     } catch (Throwable ignored) { }
-    throw new AssertionError("Disposable application History did not show the expected records; url=" + WebDriverRunner.url());
+    throw new AssertionError("Disposable application History did not show the expected records");
   }
 
   private boolean[] historyRecordPresence() {
@@ -1643,7 +1681,10 @@ public final class DisposableDividendSteps {
       if (signDocumentVisible()) return;
       throw new AssertionError("No visible Save as Draft control; url=" + webdriver().driver().url());
     }
-    controls.get(controls.size() - 1).click();
+    SelenideElement control = controls.get(controls.size() - 1);
+    executeJavaScript(
+      "arguments[0].scrollIntoView({block:'center',inline:'center'}); arguments[0].click();",
+      control.getWrappedElement());
   }
 
   private void awaitDraftSaveResult() {
@@ -1659,19 +1700,52 @@ public final class DisposableDividendSteps {
   }
 
   private void fillVisibleMandatoryFields() {
-    for (SelenideElement field : $$("input, textarea, select")) {
+    @SuppressWarnings("unchecked")
+    List<String> fieldIds = (List<String>) executeJavaScript(
+      "return [...new Set([...document.querySelectorAll('input[id],textarea[id],select[id]')]"
+        + ".map(el=>el.id).filter(Boolean))];");
+    for (String fieldId : fieldIds) {
+      // Angular rerenders dependent controls while values are entered. Resolve
+      // every field by its stable id at the moment it is inspected instead of
+      // walking a stale Selenide collection snapshot.
+      SelenideElement field = $(By.id(fieldId));
       if (!field.isDisplayed() || !field.isEnabled() || field.getAttribute("readonly") != null) continue;
       String value = field.getValue();
       boolean required = field.getAttribute("required") != null || "true".equals(field.getAttribute("aria-required"));
       boolean invalid = "true".equals(field.getAttribute("aria-invalid")) || hasValidationError(field);
-      if ((!required && !invalid) || (value != null && !value.isBlank())) continue;
       String type = field.getAttribute("type");
+      if ("date".equalsIgnoreCase(type) && invalid) {
+        repairInvalidDraftDate(field);
+        continue;
+      }
+      if ((!required && !invalid) || (value != null && !value.isBlank())) continue;
       if ("file".equalsIgnoreCase(type)) continue;
       if ("date".equalsIgnoreCase(type)) field.setValue(LocalDate.now().plusDays(2).toString());
       else if ("number".equalsIgnoreCase(type)) field.setValue("1");
       else if ("select".equalsIgnoreCase(field.getTagName())) chooseFirstNonEmpty(field);
       else field.setValue("Disposable test draft " + System.currentTimeMillis());
     }
+  }
+
+  private void repairInvalidDraftDate(SelenideElement field) {
+    String id = safe(field.getAttribute("id"));
+    LocalDate value;
+    if (id.endsWith("general_meeting_date")) value = LocalDate.now().minusDays(7);
+    else if (id.endsWith("start_date")) value = LocalDate.now().minusDays(30);
+    else if (id.endsWith("end_date")) value = LocalDate.now().minusDays(1);
+    else if (id.endsWith("ex_date")) value = nextBusinessDay(LocalDate.now());
+    else if (id.endsWith("record_date")) value = nextBusinessDay(nextBusinessDay(LocalDate.now()).plusDays(1));
+    else if (id.endsWith("payment_date")) {
+      LocalDate record = nextBusinessDay(nextBusinessDay(LocalDate.now()).plusDays(1));
+      value = nextBusinessDay(record.plusDays(1));
+    } else value = nextBusinessDay(LocalDate.now());
+    String formatted = value.format(DateTimeFormatter.ISO_LOCAL_DATE);
+    if (!id.isBlank()) setControlById(id, formatted);
+    else executeJavaScript(
+      "const el=arguments[0],value=arguments[1],setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;"
+        + "setter.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}));"
+        + "el.dispatchEvent(new Event('change',{bubbles:true}));el.dispatchEvent(new Event('blur',{bubbles:true}));",
+      field.getWrappedElement(), formatted);
   }
 
   private void resolveExcludedAccountRows() {
@@ -1768,16 +1842,41 @@ public final class DisposableDividendSteps {
    * session language, so exact label text differs per run. Field ids are
    * language-independent, so this fallback resolves those forms robustly. */
   private String fieldIdAliasFor(String label) {
-
     return switch (normalize(label)) {
       case "number of shares before" -> "bi_number_shares_before";
       case "number of new shares" -> "bi_number_shares_new";
       case "for every 1 share" -> "bi_for_every_one_share";
       case "ratio" -> "bi_ratio";
       case "meeting date" -> "bi_meeting_date";
-      case "ex-date" -> "bi_ex_date";
-      case "record date" -> "bi_record_date";
-      case "payment date" -> "bi_payment_date";
+      case "total issued shares" -> "dp_total_shares";
+      case "payment for one security" -> "dp_one_security_payment";
+      case "total payment amount" -> "dp_total_payment_amount";
+      case "date of general meeting" -> "dp_general_meeting_date";
+      case "net dividend amount transferred to the paying agent" -> "dp_net_amount_transfered_paying_agent";
+      case "yearly interest rate" -> "ip_yearly_interest_rate";
+      case "interest rate per period" -> "ip_interest_rate_per_period";
+      case "total interest payment amount" -> "ip_total_payment_amount";
+      case "net interest amount transferred to the paying agent" -> "ip_net_amount_transfered_paying_agent";
+      case "start of interest period" -> "ip_start_date";
+      case "end of interest period" -> "ip_end_date";
+      case "transfer date for the amount" -> "ip_transfer_date";
+      case "requisite details" -> "ip_requisite_details";
+      case "nominal value before" -> "aib_nominal_value_before";
+      case "additional nominal value added" -> "aib_additional_nominal_value";
+      case "nominal value of paid securities" -> "aib_nominal_value_paid";
+      case "nominal value of unpaid securities" -> "aib_nominal_value_unpaid";
+      case "effective date" -> "aib_effective_date";
+      case "ex date" -> normalize(appType).equals("bonus issue") ? "bi_ex_date" : "dp_ex_date";
+      case "record date" -> switch (normalize(appType)) {
+        case "bonus issue" -> "bi_record_date";
+        case "interest payment" -> "ip_record_date";
+        default -> "dp_record_date";
+      };
+      case "payment date" -> switch (normalize(appType)) {
+        case "bonus issue" -> "bi_payment_date";
+        case "interest payment" -> "ip_payment_date";
+        default -> "dp_payment_date";
+      };
       default -> null;
     };
   }
@@ -1930,7 +2029,12 @@ public final class DisposableDividendSteps {
       executeJavaScript("const e=arguments[0], v=arguments[1]; const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(e,v); e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); e.dispatchEvent(new Event('blur',{bubbles:true}));", field, value);
       return;
     }
-    field.click();
+    executeJavaScript("arguments[0].scrollIntoView({block:'center',inline:'center'});", field.getWrappedElement());
+    try {
+      field.click();
+    } catch (org.openqa.selenium.ElementClickInterceptedException intercepted) {
+      executeJavaScript("arguments[0].focus();", field.getWrappedElement());
+    }
     field.sendKeys(Keys.chord(Keys.CONTROL, "a"));
     field.sendKeys(value);
     field.sendKeys(Keys.TAB);
@@ -1938,6 +2042,21 @@ public final class DisposableDividendSteps {
 
   private void setDate(String label, LocalDate date) {
     setField(label, date.format(DateTimeFormatter.ISO_LOCAL_DATE));
+  }
+
+  private void setNativeDateById(String id, LocalDate date) {
+    setControlById(id, date.format(DateTimeFormatter.ISO_LOCAL_DATE));
+  }
+
+  private void setControlById(String id, String value) {
+    SelenideElement field = $("#" + id).shouldBe(visible, enabled);
+    executeJavaScript(
+      "const el=arguments[0],value=arguments[1];"
+        + "const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;"
+        + "const setter=Object.getOwnPropertyDescriptor(proto,'value').set;setter.call(el,value);"
+        + "el.dispatchEvent(new Event('input',{bubbles:true}));"
+        + "el.dispatchEvent(new Event('change',{bubbles:true}));el.dispatchEvent(new Event('blur',{bubbles:true}));",
+      field.getWrappedElement(), value);
   }
 
   private void requirePopulated(String label) {

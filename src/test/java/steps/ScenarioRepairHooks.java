@@ -66,8 +66,12 @@ public final class ScenarioRepairHooks {
           String origin = scenario.getName().startsWith("[admin]") || feature.endsWith("-int.feature")
             ? ADMIN_BASE_URL : BASE_URL;
           open(origin);
-          CookieSessionManager.restoreCookies();
-          com.codeborne.selenide.Selenide.open(origin + "/company-selection");
+          if (CookieSessionManager.restoreCookies() > 0) {
+            com.codeborne.selenide.Selenide.open(origin + "/company-selection");
+          } else {
+            CookieSessionManager.clearSavedSession();
+            clearBrowserAuthenticationState();
+          }
         } else {
           // First time or cookies expired — run the full login.
           CookieSessionManager.clearSavedSession();
@@ -79,8 +83,12 @@ public final class ScenarioRepairHooks {
         String origin = scenario.getName().startsWith("[admin]") || feature.endsWith("-int.feature")
           ? ADMIN_BASE_URL : BASE_URL;
         open(origin);
-        CookieSessionManager.restoreCookies();
-        com.codeborne.selenide.Selenide.open(origin + "/company-selection");
+        if (CookieSessionManager.restoreCookies() > 0) {
+          com.codeborne.selenide.Selenide.open(origin + "/company-selection");
+        } else {
+          CookieSessionManager.clearSavedSession();
+          clearBrowserAuthenticationState();
+        }
       } else {
         // No saved session — normal auth.
         clearBrowserAuthenticationState();

@@ -189,6 +189,7 @@ public final class DisposableExecutionRepairSteps {
       if (awaitVisibleTextIfPresent("Sign Document", 2500)) return;
 
       repairInvalidBonusIssuePaymentDate();
+      repairInvalidDividendDates();
       fillVisibleValidationFields();
       attachRequiredPdfIfAny();
       System.out.println("DISPOSABLE_REPAIR save_retry=" + attempt + " invalid=" + invalidFieldInventory());
@@ -277,6 +278,25 @@ public final class DisposableExecutionRepairSteps {
         + "if(fb){fb.remove();}}",
       paymentDate.getWrappedElement());
     sleep(500);
+  }
+
+  private static void repairInvalidDividendDates() {
+    if (!$("#dp_ex_date").exists()) return;
+    LocalDate meeting = LocalDate.now().minusDays(7);
+    LocalDate ex = nextBusinessDay(LocalDate.now().plusDays(1));
+    LocalDate record = nextBusinessDay(ex.plusDays(1));
+    LocalDate payment = nextBusinessDay(record.plusDays(1));
+    setDateIfInvalid("#dp_general_meeting_date", meeting);
+    setDateIfInvalid("#dp_ex_date", ex);
+    setDateIfInvalid("#dp_record_date", record);
+    setDateIfInvalid("#dp_payment_date", payment);
+  }
+
+  private static void setDateIfInvalid(String selector, LocalDate value) {
+    SelenideElement field = $(selector);
+    if (!field.exists() || !field.isDisplayed() || !field.isEnabled() || !isInvalid(field)) return;
+    setDateInput(field, value.format(DateTimeFormatter.ISO_LOCAL_DATE));
+    sleep(100);
   }
 
   private static LocalDate nextBusinessDay(LocalDate date) {

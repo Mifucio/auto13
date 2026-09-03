@@ -93,14 +93,14 @@ public final class CookieSessionManager {
    * Restore saved cookies into the current browser session.
    * Must be called while the browser is on the target domain (navigate there first).
    */
-  public static void restoreCookies() {
+  public static int restoreCookies() {
     if (!WebDriverRunner.hasWebDriverStarted()) {
       System.out.println("[cookies] no browser to restore cookies into");
-      return;
+      return 0;
     }
     if (!hasSavedSession()) {
       System.out.println("[cookies] no saved session to restore");
-      return;
+      return 0;
     }
     try {
       WebDriver driver = WebDriverRunner.getWebDriver();
@@ -108,7 +108,7 @@ public final class CookieSessionManager {
       List<SerializableCookie> deserialized = GSON.fromJson(json, COOKIE_LIST_TYPE);
       if (deserialized == null || deserialized.isEmpty()) {
         System.out.println("[cookies] saved cookie file is empty");
-        return;
+        return 0;
       }
 
       // Delete existing cookies first, then inject saved ones.
@@ -143,8 +143,10 @@ public final class CookieSessionManager {
       }
       System.out.printf("[cookies] restored %d/%d cookies (skipped %d) from %s%n",
           restored, deserialized.size(), skipped, COOKIE_FILE.toAbsolutePath());
+      return restored;
     } catch (Exception e) {
       System.err.println("[cookies] restore failed: " + e);
+      return 0;
     }
   }
 

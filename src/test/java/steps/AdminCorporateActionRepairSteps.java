@@ -104,6 +104,7 @@ public final class AdminCorporateActionRepairSteps {
     requireDetailRoute();
     Path downloads = Path.of(Configuration.downloadsFolder).toAbsolutePath().normalize();
     clearDirectory(downloads);
+    enableChromiumDownloads(downloads);
     List<SelenideElement> controls = exactVisibleControls("Download");
     if (controls.size() != 1) throw new AssertionError("Expected exactly one visible Download control on application detail, found " + controls.size());
     java.util.Set<String> beforeSet = downloadSet(downloads);
@@ -113,6 +114,20 @@ public final class AdminCorporateActionRepairSteps {
     if (downloadedFile == null) throw new AssertionError("Download control click did not produce a new non-empty file in " + downloads);
     DOWNLOADED_FILE.set(downloadedFile);
     System.out.println("CA35_DOWNLOADED_FILE " + downloadedFile + " size=" + safeSize(downloadedFile));
+  }
+
+  private static void enableChromiumDownloads(Path downloads) {
+    try {
+      org.openqa.selenium.WebDriver driver = com.codeborne.selenide.WebDriverRunner.getWebDriver();
+      if (driver instanceof org.openqa.selenium.chromium.ChromiumDriver chromium) {
+        chromium.executeCdpCommand("Browser.setDownloadBehavior", java.util.Map.of(
+          "behavior", "allow",
+          "downloadPath", downloads.toString(),
+          "eventsEnabled", true));
+      }
+    } catch (Throwable error) {
+      throw new AssertionError("Could not enable Chromium downloads in " + downloads, error);
+    }
   }
  
   private static java.util.Set<String> downloadSet(Path folder) {

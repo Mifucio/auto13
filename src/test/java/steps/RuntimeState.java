@@ -171,6 +171,10 @@ public final class RuntimeState {
     String autoCertPattern = "{\"pattern\":\"*\",\"filter\":{}}";
     Map<String, Object> prefs = new HashMap<>();
     prefs.put("AutoSelectCertificateForUrls", List.of(autoCertPattern));
+    prefs.put("download.default_directory", Configuration.downloadsFolder);
+    prefs.put("download.prompt_for_download", false);
+    prefs.put("download.directory_upgrade", true);
+    prefs.put("safebrowsing.enabled", true);
     chromeOptions.setExperimentalOption("prefs", prefs);
     System.out.println("  🔐 AutoSelectCertificateForUrls: " + autoCertPattern);
 
@@ -400,10 +404,14 @@ public final class RuntimeState {
 
   static final class PendingRequest {
     final String url;
+    final String method;
     final long startedAt;
+    volatile int responseStatus;
+    volatile long responseReceivedAt;
 
-    PendingRequest(String url, long startedAt) {
+    PendingRequest(String url, String method, long startedAt) {
       this.url = url;
+      this.method = method;
       this.startedAt = startedAt;
     }
   }
