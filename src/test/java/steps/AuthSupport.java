@@ -653,7 +653,7 @@ public final class AuthSupport {
       if (scoped.size() == 1) {
         System.out.println("AUTH_PROVIDER_TARGET label=" + label + " scope=" + scope
           + " candidate=" + describeElement(scoped.get(0)));
-        scoped.get(0).click();
+        clickObservedIdentityProvider(scoped.get(0));
         return;
       }
       if (scoped.size() > 1) {
@@ -663,6 +663,18 @@ public final class AuthSupport {
       sleep(100);
     }
     throw new AssertionError("Observed identity provider '" + label + "' was not uniquely visible in the active provider dialog");
+  }
+
+  private static void clickObservedIdentityProvider(SelenideElement candidate) {
+    executeJavaScript(
+      "let e=arguments[0],target=e;for(let depth=0;e&&depth<6;depth++,e=e.parentElement){"
+        + "const role=String(e.getAttribute('role')||'').toLowerCase();"
+        + "const tag=String(e.tagName||'').toLowerCase();"
+        + "const tab=e.getAttribute('tabindex');const style=getComputedStyle(e);"
+        + "if(tag==='button'||tag==='a'||tag==='label'||role==='button'||e.onclick"
+        + "||(tab!==null&&tab!=='-1')||(depth>0&&style.cursor==='pointer')){target=e;break;}}"
+        + "target.scrollIntoView({block:'center',inline:'center'});target.click();",
+      candidate.getWrappedElement());
   }
 
   private static SelenideElement activeProviderDialog(String label) {
@@ -675,12 +687,45 @@ public final class AuthSupport {
   }
 
   private static List<SelenideElement> visibleExactProviderCandidates(String label, SelenideElement scope) {
-    String selector = "button, a, [role=button], label, .authentication-method, .login-method";
+    try {
+      return collectVisibleExactProviderCandidates(label, scope);
+    } catch (StaleElementReferenceException ignored) {
+      return List.of();
+    }
+  }
+
+  private static List<SelenideElement> collectVisibleExactProviderCandidates(String label, SelenideElement scope) {
+    String selector = "button, a, [role=button], label, .authentication-method, .login-method, div, span";
     ElementsCollection candidates = scope == null ? $$(selector) : scope.$$(selector);
-    Map<WebElement, SelenideElement> unique = new LinkedHashMap<>();
+    List<SelenideElement> exact = new ArrayList<>();
     for (SelenideElement candidate : candidates) {
-      if (candidate.isDisplayed() && candidate.isEnabled() && label.equalsIgnoreCase(candidate.getText().trim())) {
-        unique.put(candidate.getWrappedElement(), candidate);
+      try {
+        if (candidate.isDisplayed() && candidate.isEnabled() && label.equalsIgnoreCase(candidate.getText().trim())) {
+          exact.add(candidate);
+        }
+      } catch (StaleElementReferenceException ignored) { }
+    }
+    Map<WebElement, SelenideElement> unique = new LinkedHashMap<>();
+    for (SelenideElement candidate : exact) {
+      boolean containsMoreSpecificMatch = false;
+      for (SelenideElement other : exact) {
+        if (candidate.equals(other)) continue;
+        try {
+          Object contains = executeJavaScript("return arguments[0].contains(arguments[1]);",
+            candidate.getWrappedElement(), other.getWrappedElement());
+          if (Boolean.TRUE.equals(contains)) {
+            containsMoreSpecificMatch = true;
+            break;
+          }
+        } catch (StaleElementReferenceException ignored) {
+          containsMoreSpecificMatch = true;
+          break;
+        }
+      }
+      if (!containsMoreSpecificMatch) {
+        try {
+          unique.put(candidate.getWrappedElement(), candidate);
+        } catch (StaleElementReferenceException ignored) { }
       }
     }
     return new ArrayList<>(unique.values());
@@ -1318,6 +1363,7 @@ public final class AuthSupport {
    * opened. */
   static void openObservedManualLoginForm() {
     List<SelenideElement> matches = new ArrayList<>();
+    String observedLabel = "";
     long deadline = System.currentTimeMillis() + Configuration.timeout;
     while (System.currentTimeMillis() < deadline) {
       // If the page redirected or the body indicates we're already past
@@ -1340,24 +1386,25 @@ public final class AuthSupport {
         }
       }
       matches.clear();
-      for (SelenideElement candidate : $("body").$$
-          ("a,button,[role=button]")) {
-        if (candidate.isDisplayed() && candidate.isEnabled()
-            && "Sign in manually".equals(candidate.getText().trim())) {
-          matches.add(candidate);
+      for (String acceptedLabel : new String[] {"Sign in manually", "Okta Sign In"}) {
+        matches.addAll(visibleExactProviderCandidates(acceptedLabel, null));
+        if (!matches.isEmpty()) {
+          observedLabel = acceptedLabel;
+          break;
         }
       }
       if (matches.size() == 1) break;
       if (matches.size() > 1) {
-        throw new AssertionError("Expected exactly one observed customer manual-login control, found "
+        throw new AssertionError("Expected exactly one observed customer login-form control, found "
           + matches.size());
       }
       sleep(100);
     }
     if (matches.size() != 1) {
-      throw new AssertionError("Expected exactly one observed customer manual-login control, found "
+      throw new AssertionError("Expected exactly one observed customer login-form control, found "
         + matches.size());
     }
+    System.out.println("CUSTOMER_LOGIN_FORM_CONTROL label=" + observedLabel);
     matches.get(0).click();
     visibleField("input[type=email], input[type=text], input[name*=user], input[name*=mail], input[name*=login]");
   }
