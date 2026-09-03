@@ -21,7 +21,7 @@ import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
-/** Keeps Additional issuance of Bonds on the observed Both paid-up branch. */
+/** Keeps Additional issuance of Bonds on the explicitly requested paid-up branch. */
 public final class AdditionalBondsBothBranchRepairSteps {
   private static final String TYPE = "Additional issuance of Bonds";
 
@@ -65,7 +65,20 @@ public final class AdditionalBondsBothBranchRepairSteps {
     fastSaveDraft(initialFailure);
   }
 
-  private static void selectObservedSourceInstrument() {
+  @When("I fill and safely save the disposable Additional issuance of Bonds form on the Yes paid-up branch")
+  public void fillAndSaveYesBranch() {
+    flow.setAppType(TYPE);
+    flow.rememberSourceInstrument(selectObservedSourceInstrument());
+    ensureObservedProcessingTime();
+    ensureObservedYesBranch();
+    setObservedMinimumAdditionalNominalValue();
+    setObservedEffectiveDate();
+    setObservedIssuerContact();
+    resolveObservedYesBondholderRow();
+    fastSaveDraft(null);
+  }
+
+  private static String selectObservedSourceInstrument() {
     SelenideElement source = $("#aib_security_name");
     long visibleDeadline = System.currentTimeMillis() + 6000;
     while (System.currentTimeMillis() < visibleDeadline
@@ -111,6 +124,10 @@ public final class AdditionalBondsBothBranchRepairSteps {
       }
     }
     System.out.println("AIB_SOURCE_INSTRUMENT selected_bond=true");
+    Select selected = new Select(source.getWrappedElement());
+    String selectedLabel = safe(selected.getFirstSelectedOption().getText()).trim();
+    String selectedValue = safe(selected.getFirstSelectedOption().getAttribute("value")).trim();
+    return selectedLabel.isBlank() ? selectedValue : selectedLabel;
   }
 
   private static void setObservedMinimumAdditionalNominalValue() {
@@ -206,6 +223,24 @@ public final class AdditionalBondsBothBranchRepairSteps {
     ensureSecondBondholderRow();
     populateObservedBondholderRow(1, holderCode, false, paid);
     System.out.println("AIB_DISTRIBUTION_SPLIT valid=true");
+  }
+
+  private static void resolveObservedYesBondholderRow() {
+    String holderCode = safe($("#aib_issuer_reg_number").getValue()).trim();
+    if (holderCode.isBlank()) {
+      throw new AssertionError("AIB Yes branch did not expose the issuer registration code for its bondholder row");
+    }
+
+    ensureObservedYesBranch();
+    setObservedMinimumAdditionalNominalValue();
+    setObservedEffectiveDate();
+    setObservedIssuerContact();
+    double amount = numericDouble(safe($("#aib_additional_nominal_value").getValue()));
+    if (amount <= 0.0001) {
+      throw new AssertionError("AIB Yes branch did not retain a positive additional nominal value");
+    }
+    populateObservedBondholderRow(0, holderCode, false, amount);
+    System.out.println("AIB_YES_BONDHOLDER valid=true");
   }
 
   private static void populateObservedBondholderRow(int index, String holderCode,
@@ -411,6 +446,37 @@ public final class AdditionalBondsBothBranchRepairSteps {
       while (System.currentTimeMillis() < deadline && !both.isSelected()) sleep(100);
     }
     if (!both.isSelected()) throw new AssertionError("AIB Both paid-up branch did not remain selected");
+  }
+
+  private static void ensureObservedProcessingTime() {
+    selectObservedRadio("aib_proc_time", null, "option1", "processing-time option");
+  }
+
+  private static void ensureObservedYesBranch() {
+    selectObservedRadio("aib_paid_up", "0", "yes_option_title", "Yes paid-up branch");
+    SelenideElement unpaid = $("#aib_nominal_value_unpaid");
+    if (unpaid.exists() && unpaid.isDisplayed() && unpaid.isEnabled()) {
+      enterObservedValue(unpaid, "0");
+    }
+  }
+
+  private static void selectObservedRadio(String name, String value, String idContains, String description) {
+    SelenideElement target = value == null
+      ? $("input[type=radio][name='" + name + "'][id*='" + idContains + "']")
+      : $("input[type=radio][name='" + name + "'][value='" + value + "']");
+    if (!target.exists()) {
+      target = $("input[type=radio][name='" + name + "'][id*='" + idContains + "']");
+    }
+    if (!target.exists() || !target.isDisplayed() || !target.isEnabled()) {
+      throw new AssertionError("AIB form did not expose the observed " + description);
+    }
+    if (!target.isSelected()) {
+      executeJavaScript("arguments[0].click();", target.getWrappedElement());
+      dispatch(target);
+      long deadline = System.currentTimeMillis() + 3000;
+      while (System.currentTimeMillis() < deadline && !target.isSelected()) sleep(100);
+    }
+    if (!target.isSelected()) throw new AssertionError("AIB " + description + " did not remain selected");
   }
 
   private static void fastSaveDraft(Throwable initialFailure) {
