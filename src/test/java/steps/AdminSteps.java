@@ -2959,14 +2959,29 @@ public class AdminSteps {
     if (url == null || !url.contains("eservicesdevint.sets.lv/home")) {
       throw new AssertionError("Expected admin home URL, got " + url);
     }
-    String bodyText = waitForNonEmptyBodyText();
-    String normalized = bodyText.toLowerCase(java.util.Locale.ROOT);
-    boolean upcomingHeading = normalized.contains("upcoming event") || normalized.contains("gaidām") || normalized.contains("предстоящ");
-    boolean corporateActionsEmptyState = normalized.contains("corporate actions")
-      && normalized.contains("you’ve not added any corporate actions yet");
-    if (!(upcomingHeading || corporateActionsEmptyState)) {
-      throw new AssertionError("Upcoming events section or its observed empty state not present. Visible text: " + normalized.substring(0, Math.min(normalized.length(), 2000)));
+    long deadline = System.currentTimeMillis() + 30000;
+    boolean upcomingHeading = false;
+    boolean corporateActionsEmptyState = false;
+    int visibleHeadingCount = 0;
+    while (System.currentTimeMillis() < deadline) {
+      String normalized = $("body").shouldBe(visible).getText()
+        .toLowerCase(java.util.Locale.ROOT);
+      upcomingHeading = normalized.contains("upcoming event")
+        || normalized.contains("gaidām") || normalized.contains("предстоящ");
+      corporateActionsEmptyState = normalized.contains("corporate actions")
+        && (normalized.contains("you’ve not added any corporate actions yet")
+          || normalized.contains("you have not added any corporate actions yet"));
+      visibleHeadingCount = 0;
+      for (SelenideElement heading : $$("h1, h2, h3, [role=heading]")) {
+        if (heading.isDisplayed()) visibleHeadingCount++;
+      }
+      if (upcomingHeading || corporateActionsEmptyState) return;
+      sleep(250);
     }
+    throw new AssertionError("Upcoming events section or its observed empty state did not render"
+      + "; visibleHeadingCount=" + visibleHeadingCount
+      + "; upcomingHeading=" + upcomingHeading
+      + "; corporateActionsEmptyState=" + corporateActionsEmptyState);
   }
 
   @Then("the admin page {string} is displayed with {string}")
