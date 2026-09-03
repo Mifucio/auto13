@@ -1,7 +1,9 @@
 package steps;
 
 import java.util.Iterator;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static steps.RuntimeState.*;
@@ -25,7 +27,7 @@ final class NetworkBusinessWaitRepair {
     "/services/external-users/api/representable-entities";
   private static final String EXTERNAL_MANAGEMENT_INFO_ENDPOINT =
     "/services/external-users/management/info";
-  private static volatile long renderedAdminApplicationListAt = 0;
+  private static final Set<String> CONSUMED_ABANDONED_ENDPOINTS = new HashSet<>();
 
   private NetworkBusinessWaitRepair() { }
 
@@ -38,7 +40,6 @@ final class NetworkBusinessWaitRepair {
       discardSupersededCustomerBootstrapRequests();
       discardSupersededAdminListRequestOnDetail();
       discardSupersededExternalListRequestOnDetail();
-      discardAdminListRequestPredatingRenderedEvidence();
 
       long now = System.currentTimeMillis();
       boolean quiet = PENDING_DATA_REQUESTS.isEmpty()
@@ -159,9 +160,10 @@ final class NetworkBusinessWaitRepair {
       }
       if (normalized.contains("/login")) return false;
       Object rendered = com.codeborne.selenide.Selenide.executeJavaScript(
-        "return (document.readyState==='interactive'||document.readyState==='complete')"
-          + "&&!!document.body&&document.body.offsetParent!==null"
-          + "&&String(document.body.innerText||'').trim().length>0;");
+        "const represented=document.querySelector('#navbarRepresentedDropdown');"
+          + "return (document.readyState==='interactive'||document.readyState==='complete')"
+          + "&&!!represented&&represented.offsetParent!==null"
+          + "&&String(represented.innerText||'').trim().length>0;");
       return Boolean.TRUE.equals(rendered);
     } catch (RuntimeException ignored) {
       return false;
@@ -179,25 +181,14 @@ final class NetworkBusinessWaitRepair {
     discardOldestAbandoned(EXTERNAL_LIST_ENDPOINT, "GET", System.currentTimeMillis());
   }
 
-  static void acknowledgeRenderedAdminApplicationList() {
-    renderedAdminApplicationListAt = System.currentTimeMillis();
-  }
-
   static void resetRenderedEvidence() {
-    renderedAdminApplicationListAt = 0;
-  }
-
-  private static void discardAdminListRequestPredatingRenderedEvidence() {
-    long evidenceAt = renderedAdminApplicationListAt;
-    if (evidenceAt <= 0) return;
-    if (discardOldestAbandoned(ADMIN_LIST_ENDPOINT, "GET", evidenceAt)) {
-      renderedAdminApplicationListAt = 0;
-    }
+    CONSUMED_ABANDONED_ENDPOINTS.clear();
   }
 
   /** Remove one exact request ID only after it has remained response-less past
    * the grace period and predates the rendered postcondition that supersedes it. */
   private static boolean discardOldestAbandoned(String endpoint, String method, long evidenceAt) {
+    if (CONSUMED_ABANDONED_ENDPOINTS.contains(endpoint)) return false;
     long now = System.currentTimeMillis();
     Map.Entry<String, RuntimeState.PendingRequest> candidate = null;
     for (Map.Entry<String, RuntimeState.PendingRequest> entry : PENDING_DATA_REQUESTS.entrySet()) {
@@ -209,6 +200,7 @@ final class NetworkBusinessWaitRepair {
     }
     if (candidate == null) return false;
     boolean removed = PENDING_DATA_REQUESTS.remove(candidate.getKey(), candidate.getValue());
+    if (removed) CONSUMED_ABANDONED_ENDPOINTS.add(endpoint);
     if (removed && PENDING_DATA_REQUESTS.isEmpty()) lastDataActivityAt = 0;
     return removed;
   }

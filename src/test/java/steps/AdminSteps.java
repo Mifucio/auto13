@@ -3331,7 +3331,7 @@ public class AdminSteps {
     if (status < 200 || status >= 300) {
       throw new AssertionError("Role editor navigated after an unsuccessful PUT response: HTTP " + status);
     }
-    removeLatestMatchingRoleRequest("PUT", expectedApiPath, probeStartedAt, completedAt);
+    removeLatestMatchingRoleRequest("PUT", path, probeStartedAt, completedAt);
   }
 
   private static long roleSaveProbeStartedAt() {
@@ -3346,7 +3346,8 @@ public class AdminSteps {
     for (Map.Entry<String, RuntimeState.PendingRequest> entry : PENDING_DATA_REQUESTS.entrySet()) {
       RuntimeState.PendingRequest pending = entry.getValue();
       if (pending == null || !method.equalsIgnoreCase(pending.method)) continue;
-      if (!expectedPath.equals(requestPath(pending.url))) continue;
+      String actualPath = requestPath(pending.url);
+      if (!actualPath.equals(expectedPath) && !actualPath.endsWith(expectedPath)) continue;
       if (pending.startedAt < minStartedAt || pending.startedAt > maxStartedAt) continue;
       if (candidate == null || pending.startedAt > candidate.getValue().startedAt) candidate = entry;
     }
@@ -3371,6 +3372,7 @@ public class AdminSteps {
     String roleId = external ? rememberedRoleId : rememberedInternalRoleId;
     String expectedDescription = external ? submittedExternalRoleDescription : submittedInternalRoleDescription;
     if (roleId == null || expectedDescription == null) return null;
+    long verificationStartedAt = System.currentTimeMillis();
     adminOpen(listPath + "/" + roleId + "/edit");
     long deadline = System.currentTimeMillis() + 15000;
     boolean matched = false;
@@ -3392,12 +3394,7 @@ public class AdminSteps {
     NetworkMockSupport.drainPerformanceLogs();
     String expectedGetPath = "/api/" + (external ? "external" : "internal")
       + "-authority-rights/" + roleId;
-    PENDING_DATA_REQUESTS.entrySet().removeIf(entry -> {
-      RuntimeState.PendingRequest pending = entry.getValue();
-      return pending != null && "GET".equalsIgnoreCase(pending.method)
-        && pending.url != null && pending.url.contains(expectedGetPath)
-        && pending.startedAt <= verifiedAt;
-    });
+    removeLatestMatchingRoleRequest("GET", expectedGetPath, verificationStartedAt, verifiedAt);
     adminOpen(listPath);
     return verifiedAt;
   }
