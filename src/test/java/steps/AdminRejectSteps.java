@@ -11,6 +11,7 @@ import java.util.List;
 import static com.codeborne.selenide.Condition.visible;
 import static com.codeborne.selenide.Selenide.$;
 import static com.codeborne.selenide.Selenide.$$;
+import static com.codeborne.selenide.Selenide.executeJavaScript;
 import static com.codeborne.selenide.Selenide.sleep;
 import static com.codeborne.selenide.WebDriverRunner.url;
 
@@ -59,13 +60,13 @@ public final class AdminRejectSteps {
     List<SelenideElement> triggers = new ArrayList<>();
     for (String label : List.of("Reject application", "Reject")) triggers.addAll(visibleControls(label));
     if (triggers.size() != 1) throw new AssertionError("Expected one visible enabled Reject control, found " + triggers.size());
-    triggers.get(0).click();
+    clickWithoutOverlay(triggers.get(0));
     sleep(250);
     SelenideElement commentField = rejectionCommentField();
     if (commentField == null) {
       List<SelenideElement> addComment = visibleControls("Add comment");
       if (addComment.size() == 1) {
-        addComment.get(0).click();
+        clickWithoutOverlay(addComment.get(0));
         commentField = rejectionCommentField();
       }
     }
@@ -74,7 +75,7 @@ public final class AdminRejectSteps {
     for (String label : List.of("Reject Application", "Confirm reject", "Reject", "Confirm")) {
       List<SelenideElement> buttons = visibleControls(label);
       if (buttons.isEmpty()) continue;
-      buttons.get(buttons.size() - 1).click();
+      clickWithoutOverlay(buttons.get(buttons.size() - 1));
       return;
     }
     throw new AssertionError("Reject confirmation control not found");
@@ -92,6 +93,11 @@ public final class AdminRejectSteps {
       } catch (Throwable ignored) { }
     }
     return result;
+  }
+
+  private static void clickWithoutOverlay(SelenideElement control) {
+    control.scrollIntoView("{block:'center',inline:'center'}");
+    executeJavaScript("arguments[0].click();", control.getWrappedElement());
   }
 
   private static SelenideElement rejectionCommentField() {

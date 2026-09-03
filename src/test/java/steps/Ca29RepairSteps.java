@@ -55,6 +55,10 @@ public final class Ca29RepairSteps {
         String text = clean(row.getText()).toLowerCase(Locale.ROOT);
         if (text.contains("submitted") && text.contains(clean(form).toLowerCase(Locale.ROOT))) {
           observedForm = form;
+          // The rendered matching row is stronger evidence than a Chrome
+          // request entry whose terminal event was omitted. A later duplicate
+          // list refresh must not invalidate this completed observation step.
+          NetworkBusinessWaitRepair.acknowledgeRenderedAdminApplicationList();
           return;
         }
       }

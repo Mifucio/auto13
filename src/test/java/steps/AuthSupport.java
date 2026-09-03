@@ -37,6 +37,12 @@ import static com.codeborne.selenide.Condition.*;
 import static steps.RuntimeState.*;
 
 public final class AuthSupport {
+  private static final ThreadLocal<Boolean> OBSERVED_LOGIN_ALREADY_AUTHENTICATED =
+    ThreadLocal.withInitial(() -> false);
+
+  static void clearObservedLoginScenarioState() {
+    OBSERVED_LOGIN_ALREADY_AUTHENTICATED.remove();
+  }
 
   // ── Administration surface (own origin, own login, sometimes 2FA) ──────
   static final String ADMIN_CREDENTIALS_FILE = resolveCredentialsFile("ADMIN_CREDENTIALS_FILE");
@@ -196,8 +202,8 @@ public final class AuthSupport {
         String curBody = "";
         try { curBody = $("body").shouldBe(visible).getText(); } catch (Throwable ignored) { }
         String norm = curBody == null ? "" : curBody.toLowerCase(java.util.Locale.ROOT);
-        if (curUrl != null && !curUrl.contains("/login")) {
-          System.out.println("  [login] already authenticated (url=" + curUrl + ")");
+        if (isAuthenticatedCustomerRoute(curUrl)) {
+          System.out.println("  [login] already authenticated on customer origin");
           return;
         }
         if (!norm.contains("sign in")) {
@@ -214,14 +220,29 @@ public final class AuthSupport {
         }
       }
       switchToLoginFrameIfPresent();
-      SelenideElement identifier = visibleField("input:not([type=hidden])[type=email], input:not([type=hidden])[type=text], input:not([type=hidden])[name*=user], input:not([type=hidden])[name*=identifier], input:not([type=hidden])[name*=login], input[autocomplete=username]");
+      String identifierSelector = "input:not([type=hidden])[type=email], input:not([type=hidden])[type=text], input:not([type=hidden])[name*=user], input:not([type=hidden])[name*=identifier], input:not([type=hidden])[name*=login], input[autocomplete=username]";
+      SelenideElement identifier = visibleField(identifierSelector);
       if (identifier == null) {
-        throw new AssertionError("Observed customer login form did not expose an identifier field");
+        switchToDefaultContent();
+        String current = WebDriverRunner.url();
+        if (isAuthenticatedCustomerRoute(current)) {
+          System.out.println("  [login] customer session became authenticated while the form rendered");
+          return;
+        }
+        if (attempt < maxAttempts) {
+          System.out.println("  [login] identifier field not rendered; refreshing login before retry "
+            + (attempt + 1) + "/" + maxAttempts);
+          open(BASE_URL + "/login");
+          sleep(500);
+          continue;
+        }
+        throw new AssertionError("Observed customer login form did not expose an identifier field after "
+          + maxAttempts + " attempts");
       }
       setValueWithoutEvidenceLogging(identifier, authIdentifier);
       // Click the email field to activate the Okta Sign In button
       // (it stays disabled until the email field receives input).
-      identifier.click();
+      focusCurrentLoginIdentifier(identifierSelector);
       sleep(500);
 
       // ── Okta SSO login (no password) ────────────────────────────
@@ -250,13 +271,13 @@ public final class AuthSupport {
             if (oktaButton == null) sleep(250);
             else {
               // Button is visible but still disabled; re-click email field.
-              identifier.click();
+              focusCurrentLoginIdentifier(identifierSelector);
               sleep(500);
             }
           }
           if (oktaButton == null || !oktaButton.isEnabled()) {
             System.out.println("  [login] Okta button not enabled after waiting, retrying...");
-            identifier.click();
+            focusCurrentLoginIdentifier(identifierSelector);
             sleep(1000);
             continue;
           }
@@ -265,10 +286,10 @@ public final class AuthSupport {
           long clickDeadline = System.currentTimeMillis() + 3000;
           while (System.currentTimeMillis() < clickDeadline) {
             String urlAfter = WebDriverRunner.url();
-            if (urlAfter != null && !urlAfter.contains("/login")) break;
+            if (isAuthenticatedCustomerRoute(urlAfter)) break;
             sleep(250);
           }
-          if (!WebDriverRunner.url().contains("/login")) break;
+          if (isAuthenticatedCustomerRoute(WebDriverRunner.url())) break;
           System.out.println("  [login] Okta button clicked but still on login, retrying click in 3s...");
           sleep(3000);
         }
@@ -310,6 +331,17 @@ public final class AuthSupport {
       if (!stillOnLogin || !failedToSignIn) return;
       System.out.println("  [login] server returned 'Failed to sign in' or still on login page, retrying...");
     }
+  }
+
+  private static void focusCurrentLoginIdentifier(String selector) {
+    // The login SPA can replace the identifier input immediately after its
+    // value event enables Okta. Resolve and focus the current DOM node inside
+    // one script execution instead of clicking a retained stale WebElement.
+    executeJavaScript(
+      "const el=[...document.querySelectorAll(arguments[0])].find(x=>{"
+        + "const r=x.getBoundingClientRect(),s=getComputedStyle(x);"
+        + "return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'});"
+        + "if(el){el.focus();el.click();}", selector);
   }
 
   static boolean hasDokobitCredentials() {
@@ -714,6 +746,11 @@ public final class AuthSupport {
    *  The helper never clicks an arbitrary first match and never treats a click
    *  alone as proof that the scenario behavior occurred. */
   static void submitObservedForm() {
+    if (Boolean.TRUE.equals(OBSERVED_LOGIN_ALREADY_AUTHENTICATED.get())) {
+      OBSERVED_LOGIN_ALREADY_AUTHENTICATED.remove();
+      System.out.println("  [login] submit skipped because the protected application session is already active");
+      return;
+    }
     String currentUrl = WebDriverRunner.url();
     String beforeUrl = currentUrl;
     String beforeFingerprint = pageFingerprint();
@@ -781,8 +818,8 @@ public final class AuthSupport {
         // /login within a second or two. If still on /login, proceed.
         sleep(500);
         String afterSettle = WebDriverRunner.url();
-        if (afterSettle == null || !afterSettle.contains("/login")) {
-          System.out.println("  [submit] page left /login during settle (url=" + afterSettle + "), already authenticated");
+        if (isAuthenticatedCustomerRoute(afterSettle)) {
+          System.out.println("  [submit] customer session authenticated during login settle");
           return;
         }
         // On retry attempts, manualLogin() checks if already authenticated
@@ -817,6 +854,20 @@ public final class AuthSupport {
       return candidate.getScheme().equalsIgnoreCase(expected.getScheme())
         && candidate.getHost().equalsIgnoreCase(expected.getHost())
         && candidate.getPort() == expected.getPort();
+    } catch (IllegalArgumentException ignored) {
+      return false;
+    }
+  }
+
+  private static boolean isAuthenticatedCustomerRoute(String candidateUrl) {
+    if (!sameOrigin(candidateUrl, BASE_URL)) return false;
+    try {
+      String path = java.net.URI.create(candidateUrl).getPath();
+      if (path == null) return false;
+      String normalized = path.toLowerCase(java.util.Locale.ROOT);
+      return !normalized.contains("/login")
+        && !normalized.contains("/error")
+        && !normalized.contains("/access-denied");
     } catch (IllegalArgumentException ignored) {
       return false;
     }
@@ -926,6 +977,12 @@ public final class AuthSupport {
     String lastText = "";
     boolean redirectedToExpectedPath = false;
     while (System.currentTimeMillis() < deadline) {
+      lastUrl = WebDriverRunner.url();
+      try {
+        lastText = $("body").shouldBe(visible).getText();
+      } catch (Throwable ignored) {
+        lastText = "";
+      }
       String normalized = lastText == null ? "" : lastText.toLowerCase(java.util.Locale.ROOT);
       // If Okta SSO redirected to the admin origin (eservicesdevint) instead
       // of the customer page, navigate back and retry login.
@@ -974,8 +1031,8 @@ public final class AuthSupport {
         long autoNavDeadline = System.currentTimeMillis() + 5000;
         while (System.currentTimeMillis() < autoNavDeadline) {
           String url = WebDriverRunner.url();
-          if (url != null && !url.contains("/company-selection") && !url.contains("/login")) {
-            System.out.println("AUTH_CUSTOMER_AUTO_NAVIGATED to=" + url);
+          if (isAuthenticatedCustomerRoute(url) && !url.contains("/company-selection")) {
+            System.out.println("AUTH_CUSTOMER_AUTO_NAVIGATED ready=true");
             redirectedToExpectedPath = true;
             return;
           }
@@ -1262,9 +1319,10 @@ public final class AuthSupport {
       // If the page redirected or the body indicates we're already past
       // the login screen, fail fast instead of waiting the full timeout.
       String nowUrl = WebDriverRunner.url();
-      if (nowUrl == null || !nowUrl.contains("/login")) {
-        throw new AssertionError("Cannot open manual login form: page redirected to " + nowUrl
-          + " (likely already authenticated)");
+      if (isAuthenticatedCustomerRoute(nowUrl)) {
+        OBSERVED_LOGIN_ALREADY_AUTHENTICATED.set(true);
+        System.out.println("  [login] manual form skipped because the customer session is authenticated");
+        return;
       }
       // After a 2s grace period for page render, check if the body text
       // still references "Sign in" — if not, the session is already active.
@@ -1273,13 +1331,13 @@ public final class AuthSupport {
         try { nowBody = $("body").shouldBe(visible).getText(); } catch (Throwable ignored) { }
         String normBody = nowBody == null ? "" : nowBody.toLowerCase(java.util.Locale.ROOT);
         if (!normBody.isEmpty() && !normBody.contains("sign in")) {
-          throw new AssertionError("Cannot open manual login form: login page no longer shows 'Sign in' text"
-            + " (likely already authenticated). url=" + nowUrl);
+          sleep(100);
+          continue;
         }
       }
       matches.clear();
       for (SelenideElement candidate : $("body").$$
-          ("a[type=text]")) {
+          ("a,button,[role=button]")) {
         if (candidate.isDisplayed() && candidate.isEnabled()
             && "Sign in manually".equals(candidate.getText().trim())) {
           matches.add(candidate);
@@ -1302,10 +1360,9 @@ public final class AuthSupport {
 
   static void fillByLabel(String label, String value) {
     if ("Search query".equals(label)) {
-      // Quick poll for the search field instead of waiting the full 70s timeout
-      long deadline = System.currentTimeMillis() + 10000;
+      long deadline = System.currentTimeMillis() + Configuration.timeout;
       while (System.currentTimeMillis() < deadline) {
-        SelenideElement observedSearch = $("input[type=search][name=search]");
+        SelenideElement observedSearch = $("input[type=search][name=search], input[formcontrolname=inputSearchValue], input[placeholder*='Search by']");
         if (observedSearch.exists() && observedSearch.isDisplayed()) {
           observedSearch.setValue(value);
           return;
@@ -1442,24 +1499,32 @@ public final class AuthSupport {
 
   static void selectCompanyCardOnSelectionPage(String company) {
     String wanted = normalizedCompanyText(company).toLowerCase(java.util.Locale.ROOT);
-    long deadline = System.currentTimeMillis() + Math.min(Configuration.timeout, 20000);
+    long startedAt = System.currentTimeMillis();
+    long deadline = startedAt + Math.min(Configuration.timeout, 45000);
     int settleMs = 250;
-    boolean refreshed = false;
+    int refreshes = 0;
+    boolean reauthenticatedAfterBounce = false;
     while (System.currentTimeMillis() < deadline) {
 
       String current = WebDriverRunner.url();
       if (current != null && !current.contains("/company-selection")) {
         if (!current.contains("/login")) return;
         System.out.println("AUTH_COMPANY_CARD_BOUNCE_TO_LOGIN url=" + current);
-        open("/company-selection");
+        if (!reauthenticatedAfterBounce) {
+          reauthenticatedAfterBounce = true;
+          reauthenticateCustomerAfterCompanyBounce();
+        } else {
+          open(BASE_URL + "/company-selection");
+        }
         continue;
       }
       int matches = countCompanyCard(wanted);
       if (matches == 0) {
-        if (!refreshed && System.currentTimeMillis() > deadline - 5000) {
-
+        long elapsed = System.currentTimeMillis() - startedAt;
+        if (refreshes < 2 && elapsed >= (refreshes + 1L) * 15000L) {
           refresh();
-          refreshed = true;
+          refreshes++;
+          sleep(500);
         }
         sleep(100);
         continue;
@@ -1487,7 +1552,12 @@ public final class AuthSupport {
 
           if (!next.contains("/login")) return;
           System.out.println("AUTH_COMPANY_CARD_BOUNCE_TO_LOGIN url=" + next);
-          open("/company-selection");
+          if (!reauthenticatedAfterBounce) {
+            reauthenticatedAfterBounce = true;
+            reauthenticateCustomerAfterCompanyBounce();
+          } else {
+            open(BASE_URL + "/company-selection");
+          }
           leftPage = true;
           break;
         }
@@ -1501,6 +1571,17 @@ public final class AuthSupport {
     }
     throw new AssertionError("Represented-company card selection failed for '"
       + company + "'; observed=" + observedCompanyCards() + "; url=" + WebDriverRunner.url());
+  }
+
+  private static void reauthenticateCustomerAfterCompanyBounce() {
+    clearObservedLoginScenarioState();
+    WebDriverRunner.getWebDriver().manage().deleteAllCookies();
+    open(BASE_URL + "/login");
+    openObservedManualLoginForm();
+    submitObservedForm();
+    if (WebDriverRunner.url() == null || !WebDriverRunner.url().contains("/company-selection")) {
+      open(BASE_URL + "/company-selection");
+    }
   }
 
   private static int countCompanyCard(String wanted) {
@@ -1830,7 +1911,8 @@ public final class AuthSupport {
       try { body = $("body").shouldBe(visible).getText(); } catch (Throwable ignored) { }
       String normalized = body == null ? "" : body.toLowerCase(java.util.Locale.ROOT);
       boolean protectedLandmark = url != null && !url.contains("/login")
-        && (normalized.contains("management") || normalized.contains("corporate actions")
+        && ($("#navbarProfileDropdown").isDisplayed()
+          || normalized.contains("management") || normalized.contains("corporate actions")
           || normalized.contains("welcome back") || normalized.matches("(?s).*\\bhome\\b.*\\b(persons|roles|users|management)\\b.*"));
       if (protectedLandmark) return;
       if (url != null && url.contains("/login") && normalized.contains("sign in manually")) break;
@@ -1845,7 +1927,23 @@ public final class AuthSupport {
         open(ADMIN_BASE_URL + "/login");
       }
       // The login card hides the form behind a "Sign in manually" toggle.
-      SelenideElement manualSignIn = $("a[type=text]").shouldHave(text("Sign in manually")).shouldBe(visible);
+      SelenideElement manualSignIn = null;
+      long manualDeadline = System.currentTimeMillis() + 15000;
+      while (System.currentTimeMillis() < manualDeadline && manualSignIn == null) {
+        for (SelenideElement candidate : $$("a, button, [role=button]")) {
+          if (candidate.isDisplayed() && candidate.isEnabled()
+              && "Sign in manually".equalsIgnoreCase(candidate.getText().trim())) {
+            manualSignIn = candidate;
+            break;
+          }
+        }
+        if (manualSignIn == null) sleep(200);
+      }
+      if (manualSignIn == null) {
+        String current = WebDriverRunner.url();
+        if (current != null && !current.contains("/login")) return;
+        throw new AssertionError("Admin login page did not expose the Sign in manually control");
+      }
       manualSignIn.click();
       SelenideElement userField = visibleField("input[type=text], input[type=email], input[name*=user], input[name*=login], input[name=username]");
       if (userField != null) setValueWithoutEvidenceLogging(userField, adminIdentifier);

@@ -1068,7 +1068,7 @@ public class AdminSteps {
     if (observedId == null || !observedId.matches("[0-9]+")) {
       throw new AssertionError("Observed role row has no numeric identity: " + matches.get(0).getAttribute("outerHTML"));
     }
-    System.out.println("  👁️  Found role row id=" + observedId + ", navigating to editor...");
+    System.out.println("  👁️  Found the configured role, navigating to editor...");
     adminOpen(listPath + "/" + observedId + "/edit");
     System.out.println("  👁️  Waiting for editor route...");
     awaitManagementRouteChange(listPath);
@@ -1084,7 +1084,21 @@ public class AdminSteps {
     if (url == null || !url.matches("https://eservicesdevint\\.sets\\.lv" + expectedPath + "(?:[/?#].*)?")) {
       throw new AssertionError("Expected admin management route " + expectedPath + ", got " + url);
     }
-    $("h1").shouldBe(visible).shouldHave(text(expectedHeading));
+    long deadline = System.currentTimeMillis() + 20000;
+    boolean reopened = false;
+    while (System.currentTimeMillis() < deadline) {
+      SelenideElement heading = $("h1");
+      if (heading.exists() && heading.isDisplayed() && heading.getText().contains(expectedHeading)) break;
+      if (!reopened && System.currentTimeMillis() + 10000 >= deadline) {
+        adminOpen(expectedPath);
+        reopened = true;
+      }
+      sleep(200);
+    }
+    SelenideElement heading = $("h1");
+    if (!heading.exists() || !heading.isDisplayed() || !heading.getText().contains(expectedHeading)) {
+      throw new AssertionError("Admin management heading did not render on the expected route");
+    }
     visibleManagementTable().shouldBe(visible);
   }
 
@@ -1194,7 +1208,7 @@ public class AdminSteps {
       throw new AssertionError("Observed role row has no numeric identity");
     }
     System.out.println("  [timer] find row done (" + (System.currentTimeMillis()-t0) + "ms)");
-    System.out.println("  👁️  Found '" + roleName + "' row id=" + observedId + ", navigating to editor...");
+    System.out.println("  👁️  Found the configured external role, navigating to editor...");
     adminOpen("/external/admin/authority-rights/" + observedId + "/edit");
     System.out.println("  👁️  Waiting for editor route...");
     long deadline = System.currentTimeMillis() + 30000;
@@ -2976,6 +2990,13 @@ public class AdminSteps {
   // ── External role edit round-trip state ──────────────────────
   private static String rememberedRoleDescription = null;
   private static String rememberedRoleId = null;
+  private static int rememberedRoleDescriptionFieldIndex = -1;
+  private static String rememberedRoleDescriptionFieldId = null;
+  private static String rememberedRoleDescriptionFieldName = null;
+  private static String rememberedRoleDescriptionFormControlName = null;
+  private static String rememberedRoleDescriptionDataCy = null;
+  private static String submittedExternalRoleDescription = null;
+  private static boolean externalRoleServerStateDirty = false;
   private static final java.util.regex.Pattern PAGINATION_PATTERN =
     java.util.regex.Pattern.compile("(\\d+)\\s*-\\s*(\\d+)\\s*of\\s*(\\d+)");
 
@@ -3019,7 +3040,7 @@ public class AdminSteps {
     }
 
     rememberedRoleId = observedId;
-    System.out.println("  👁️  Found '" + roleName + "' row id=" + observedId + " (" + (System.currentTimeMillis() - t0) + "ms)");
+    System.out.println("  👁️  Found the configured external role (" + (System.currentTimeMillis() - t0) + "ms)");
     adminOpen("/external/admin/authority-rights/" + observedId + "/edit");
 
     // Wait for editor route
@@ -3036,8 +3057,7 @@ public class AdminSteps {
     SelenideElement table = visibleManagementTable();
     for (SelenideElement row : table.$$("tbody tr[id]")) {
       if (!row.isDisplayed()) continue;
-      String text = row.getText();
-      if (text != null && text.contains(roleName)) return row;
+      if (rowHasExactCellText(row, roleName)) return row;
     }
     return null;
   }
@@ -3048,13 +3068,21 @@ public class AdminSteps {
     if (url == null || !url.contains("/external/admin/authority-rights/") || !url.contains("/edit")) {
       throw new AssertionError("Expected role editor route, got " + url);
     }
-    $("h1").shouldBe(visible);
-    $("form").shouldBe(visible);
-    String body = waitForNonEmptyBodyText();
-    boolean roleObserved = body != null && body.contains(roleName);
-    for (SelenideElement field : $$("input, textarea")) {
-      String value = field.getValue();
-      if (value != null && value.trim().equals(roleName)) roleObserved = true;
+    awaitRoleEditorShell("/external/admin/authority-rights/" + rememberedRoleId + "/edit");
+    long deadline = System.currentTimeMillis() + 15000;
+    boolean roleObserved = false;
+    while (System.currentTimeMillis() < deadline) {
+      Object observed = executeJavaScript(
+        "const expected=String(arguments[0]);"
+          + "if(String(document.body?.innerText||'').includes(expected))return true;"
+          + "return [...document.querySelectorAll('input,textarea')]"
+          + ".some(field=>String(field.value||'').trim()===expected);",
+        roleName);
+      if (Boolean.TRUE.equals(observed)) {
+        roleObserved = true;
+        break;
+      }
+      sleep(100);
     }
     if (!roleObserved) {
       throw new AssertionError("Role editor does not contain '" + roleName + "' in visible text or field values");
@@ -3064,9 +3092,23 @@ public class AdminSteps {
 
   @When("I remember the role Description and append {string} after the word {string}")
   public void i_remember_description_and_append(String suffix, String afterWord) {
+    if (externalRoleServerStateDirty) {
+      throw new AssertionError("An earlier external-role mutation still requires fixture cleanup");
+    }
     SelenideElement descField = findDescriptionField();
-    rememberedRoleDescription = descField.getValue() == null ? "" : descField.getValue().trim();
-    System.out.println("  📝  Original Description: \"" + rememberedRoleDescription + "\"");
+    Number fieldIndex = executeJavaScript(
+      "return [...document.querySelectorAll('textarea,input')].indexOf(arguments[0]);",
+      descField.getWrappedElement());
+    rememberedRoleDescriptionFieldIndex = fieldIndex == null ? -1 : fieldIndex.intValue();
+    if (rememberedRoleDescriptionFieldIndex < 0) {
+      throw new AssertionError("The external role Description control could not be correlated");
+    }
+    rememberedRoleDescriptionFieldId = descField.getAttribute("id");
+    rememberedRoleDescriptionFieldName = descField.getAttribute("name");
+    rememberedRoleDescriptionFormControlName = descField.getAttribute("formcontrolname");
+    rememberedRoleDescriptionDataCy = descField.getAttribute("data-cy");
+    rememberedRoleDescription = descField.getValue() == null ? "" : descField.getValue();
+    System.out.println("  📝  Remembered the original external role Description");
 
     // Find the position after the word "tests" and insert suffix
     String modified = rememberedRoleDescription;
@@ -3078,62 +3120,44 @@ public class AdminSteps {
       // Fallback: append at end
       modified = modified + suffix;
     }
-    descField.clear();
-    descField.sendKeys(modified);
-    System.out.println("  📝  Modified Description: \"" + modified + "\"");
+    setAngularFieldValue(descField, modified);
+    submittedExternalRoleDescription = descField.getValue() == null ? "" : descField.getValue();
+    if (sameRoleDescription(rememberedRoleDescription, submittedExternalRoleDescription)) {
+      throw new AssertionError("The external role Description did not accept the requested modification");
+    }
+    System.out.println("  📝  External role Description modified");
   }
 
   @And("I click {string} on the role editor")
   public void i_click_save_on_role_editor(String buttonLabel) {
-    // Use submit-type button (there are two "Save" labels — one submit, one not)
-    SelenideElement save = $("button[type=submit]").shouldBe(visible).shouldBe(enabled);
-    save.click();
-    System.out.println("  👁️  Clicked '" + buttonLabel + "' on role editor");
-
-    // Wait for redirect back to the list page (no success toast — return to list = success)
-    long deadline = System.currentTimeMillis() + 15000;
-    while (System.currentTimeMillis() < deadline) {
-      String url = WebDriverRunner.url();
-      if (url != null && url.contains("/external/admin/authority-rights") && !url.contains("/edit")) {
-        System.out.println("  👁️  Returned to role list after save");
-        return;
-      }
-      sleep(300);
-    }
-    // Fallback: check for success message on the current page
-    try {
-      String body = $("body").getText();
-      if (body != null && (body.toLowerCase(java.util.Locale.ROOT).contains("saved")
-          || body.toLowerCase(java.util.Locale.ROOT).contains("success"))) {
-        System.out.println("  👁️  Save confirmed via success message on editor page");
-        // Stay on editor page — the next verification step accepts this
-        return;
-      }
-    } catch (Throwable ignored) { }
-    System.out.println("  👁️  Save clicked, current URL=" + WebDriverRunner.url());
+    boolean restoredState = rememberedRoleDescription != null
+      && sameRoleDescription(rememberedRoleDescription, submittedExternalRoleDescription);
+    if (!restoredState) externalRoleServerStateDirty = true;
+    saveRoleAndReturnToList(buttonLabel, "/external/admin/authority-rights");
+    if (restoredState) externalRoleServerStateDirty = false;
   }
 
   @When("I find and open the observed external role {string} editor again")
   public void i_find_and_open_external_role_editor_again(String roleName) {
     assertAdminList("/external/admin/authority-rights", "External Roles");
-
-    SelenideElement targetRow = findRoleOnCurrentPage(roleName);
-    if (targetRow == null) {
-      throw new AssertionError("Role '" + roleName + "' not found on the list page after returning from editor");
+    if (rememberedRoleId == null || !rememberedRoleId.matches("[0-9]+")) {
+      throw new AssertionError("No observed external role identity was retained for reopening");
     }
-    String observedId = targetRow.getAttribute("id");
-    if (observedId != null && observedId.matches("[0-9]+")) {
-      rememberedRoleId = observedId;
-    }
-    System.out.println("  👁️  Re-opening role '" + roleName + "' row id=" + observedId);
-    adminOpen("/external/admin/authority-rights/" + observedId + "/edit");
+    System.out.println("  👁️  Re-opening the configured external role");
+    adminOpen("/external/admin/authority-rights/" + rememberedRoleId + "/edit");
 
     long deadline = System.currentTimeMillis() + 30000;
     while (System.currentTimeMillis() < deadline) {
       String url = WebDriverRunner.url();
-      if (url != null && url.contains("/external/admin/authority-rights/" + observedId + "/edit")) break;
+      if (url != null && url.contains("/external/admin/authority-rights/" + rememberedRoleId + "/edit")) break;
       sleep(300);
     }
+    String persistedDescription = awaitExternalRoleDescriptionValue();
+    if (submittedExternalRoleDescription == null
+        || !sameRoleDescription(submittedExternalRoleDescription, persistedDescription)) {
+      throw new AssertionError("The external role Description mutation was not persisted after reopening");
+    }
+    System.out.println("ROLE_STATE_VERIFY type=external matched=true");
   }
 
   @When("I restore the original role Description")
@@ -3142,11 +3166,9 @@ public class AdminSteps {
       throw new AssertionError("No original role Description was remembered — run the modify step first");
     }
     SelenideElement descField = findDescriptionField();
-    String current = descField.getValue() == null ? "" : descField.getValue().trim();
-    System.out.println("  📝  Current Description: \"" + current + "\"");
-    System.out.println("  📝  Restoring to: \"" + rememberedRoleDescription + "\"");
-    descField.clear();
-    descField.sendKeys(rememberedRoleDescription);
+    System.out.println("  📝  Restoring the original external role Description");
+    setAngularFieldValue(descField, rememberedRoleDescription);
+    submittedExternalRoleDescription = descField.getValue() == null ? "" : descField.getValue();
   }
 
   private static SelenideElement findDescriptionField() {
@@ -3181,11 +3203,246 @@ public class AdminSteps {
     return html == null ? body.getText() : html;
   }
 
+  private static boolean rowHasExactCellText(SelenideElement row, String expected) {
+    String wanted = expected == null ? "" : expected.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim();
+    for (SelenideElement cell : row.$$("td")) {
+      String text = cell.getText();
+      String normalized = text == null ? "" : text.replace('\u00a0', ' ').replaceAll("\\s+", " ").trim();
+      if (wanted.equalsIgnoreCase(normalized)) return true;
+    }
+    return false;
+  }
+
+  private static void setAngularFieldValue(SelenideElement field, String value) {
+    executeJavaScript("arguments[0].scrollIntoView({block:'center',inline:'center'});", field.getWrappedElement());
+    try {
+      field.click();
+      field.sendKeys(Keys.chord(Keys.CONTROL, "a"));
+      field.sendKeys(value);
+      field.sendKeys(Keys.TAB);
+    } catch (ElementClickInterceptedException intercepted) {
+      executeJavaScript(
+        "const el=arguments[0], value=arguments[1];"
+          + "const proto=el.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;"
+          + "const setter=Object.getOwnPropertyDescriptor(proto,'value').set;setter.call(el,value);"
+          + "el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));"
+          + "el.dispatchEvent(new Event('change',{bubbles:true}));el.dispatchEvent(new Event('blur',{bubbles:true}));",
+        field.getWrappedElement(), value);
+    }
+  }
+
+  private static void saveRoleAndReturnToList(String buttonLabel, String listPath) {
+    installRoleSaveResponseProbe();
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      String preferredSelector = attempt == 1 ? "form button[type=submit]" : "#editingNavbar button";
+      SelenideElement save = firstVisibleEnabledRoleSave(preferredSelector);
+      if (save == null) save = firstVisibleEnabledRoleSave("button, [role=button]");
+      if (save == null) throw new AssertionError("Role editor exposed no visible enabled Save control");
+      executeJavaScript("arguments[0].scrollIntoView({block:'center'});", save.getWrappedElement());
+      try {
+        save.click();
+      } catch (ElementClickInterceptedException intercepted) {
+        executeJavaScript("arguments[0].click();", save.getWrappedElement());
+      }
+      System.out.println("  👁️  Clicked '" + buttonLabel + "' on role editor attempt=" + attempt);
+
+      long deadline = System.currentTimeMillis() + 15000;
+      while (System.currentTimeMillis() < deadline) {
+        String current = WebDriverRunner.url();
+        if (current != null && current.contains(listPath) && !current.contains("/edit")) {
+          reconcileSuccessfulRoleSaveRequest(listPath);
+          if ("/external/admin/authority-rights".equals(listPath)) {
+            externalRoleServerStateDirty = rememberedRoleDescription != null
+              && !rememberedRoleDescription.equals(submittedExternalRoleDescription);
+          }
+          return;
+        }
+        int terminalStatus = latestRoleSaveResponseStatus();
+        if (terminalStatus >= 400) {
+          throw new AssertionError("Role save request failed with HTTP " + terminalStatus);
+        }
+        sleep(250);
+      }
+    }
+    throw new AssertionError("Role save did not return to its list; formState=" + roleFormState());
+  }
+
+  private static void installRoleSaveResponseProbe() {
+    executeJavaScript(
+      "if(!window.__roleSaveProbeInstalled){window.__roleSaveProbeInstalled=true;window.__roleSaveResponses=[];"
+        + "const open=XMLHttpRequest.prototype.open,send=XMLHttpRequest.prototype.send;"
+        + "const shape=v=>{if(Array.isArray(v))return 'array['+v.length+']';if(v===null)return 'null';return typeof v};"
+        + "XMLHttpRequest.prototype.open=function(method,url){this.__roleSaveMethod=String(method);this.__roleSaveUrl=String(url);return open.apply(this,arguments)};"
+        + "XMLHttpRequest.prototype.send=function(body){if((this.__roleSaveUrl||'').includes('authority-rights')){"
+        + "let requestShape='';try{const parsed=JSON.parse(String(body||''));requestShape=Object.entries(parsed)"
+        + ".map(([key,value])=>key+':'+shape(value)).sort().join(',')}catch(_){}"
+        + "this.addEventListener('loadend',()=>window.__roleSaveResponses.push({"
+        + "method:this.__roleSaveMethod,path:new URL(this.__roleSaveUrl,location.href).pathname,status:this.status,requestShape,"
+        + "responseBytes:String(this.responseText||'').length,completedAt:Date.now()}));}return send.apply(this,arguments)};}"
+        + "window.__roleSaveResponses=[];window.__roleSaveStartedAt=Date.now();"
+    );
+  }
+
+  private static int latestRoleSaveResponseStatus() {
+    Object status = executeJavaScript(
+      "const values=(window.__roleSaveResponses||[]).filter(value=>value.method==='PUT');"
+        + "return values.length?Number(values[values.length-1].status||0):0;");
+    return status instanceof Number ? ((Number) status).intValue() : 0;
+  }
+
+  private static void reconcileSuccessfulRoleSaveRequest(String listPath) {
+    boolean external = "/external/admin/authority-rights".equals(listPath);
+    String expectedRoleId = external ? rememberedRoleId : rememberedInternalRoleId;
+    String expectedApiPath = "/api/" + (external ? "external" : "internal")
+      + "-authority-rights/" + expectedRoleId;
+    long probeStartedAt = roleSaveProbeStartedAt();
+    NetworkMockSupport.drainPerformanceLogs();
+    // The editor GET can remain in Chrome's performance log after the fully
+    // rendered editor has already submitted and navigated away. Remove only
+    // that proven-stale read. A mutation PUT remains blocking unless exact
+    // successful response evidence below correlates it.
+    removeLatestMatchingRoleRequest("GET", expectedApiPath, 0, probeStartedAt);
+    Object completion = executeJavaScript(
+      "const values=(window.__roleSaveResponses||[]).filter(value=>value.method==='PUT');"
+        + "const value=values.length?values[values.length-1]:null;"
+        + "return value?JSON.stringify(value):'';");
+    String observed = completion == null ? "" : completion.toString();
+    java.util.regex.Matcher statusMatcher = java.util.regex.Pattern.compile("\"status\":(\\d+)").matcher(observed);
+    java.util.regex.Matcher pathMatcher = java.util.regex.Pattern.compile("\"path\":\"([^\"]+)\"").matcher(observed);
+    java.util.regex.Matcher timeMatcher = java.util.regex.Pattern.compile("\"completedAt\":(\\d+)").matcher(observed);
+    if (!statusMatcher.find() || !pathMatcher.find() || !timeMatcher.find()) {
+      Long verifiedAt = verifySubmittedRoleState(listPath);
+      if (verifiedAt != null) {
+        String expectedPath = "/api/"
+          + ("/external/admin/authority-rights".equals(listPath) ? "external" : "internal")
+          + "-authority-rights/"
+          + ("/external/admin/authority-rights".equals(listPath) ? rememberedRoleId : rememberedInternalRoleId);
+        removeLatestMatchingRoleRequest("PUT", expectedPath, probeStartedAt, verifiedAt);
+        return;
+      }
+      throw new AssertionError("Role editor returned to the list without positive save evidence");
+    }
+    int status = Integer.parseInt(statusMatcher.group(1));
+    String path = pathMatcher.group(1);
+    long completedAt = Long.parseLong(timeMatcher.group(1));
+    if (expectedRoleId == null || !path.contains(expectedApiPath)) {
+      throw new AssertionError("Role editor response evidence did not match the current save target");
+    }
+    if (status < 200 || status >= 300) {
+      throw new AssertionError("Role editor navigated after an unsuccessful PUT response: HTTP " + status);
+    }
+    removeLatestMatchingRoleRequest("PUT", expectedApiPath, probeStartedAt, completedAt);
+  }
+
+  private static long roleSaveProbeStartedAt() {
+    Object value = executeJavaScript("return Number(window.__roleSaveStartedAt||0);");
+    return value instanceof Number ? ((Number) value).longValue() : 0;
+  }
+
+  /** Remove one exact Chrome request ID correlated to this role target and save window. */
+  private static boolean removeLatestMatchingRoleRequest(
+      String method, String expectedPath, long minStartedAt, long maxStartedAt) {
+    Map.Entry<String, RuntimeState.PendingRequest> candidate = null;
+    for (Map.Entry<String, RuntimeState.PendingRequest> entry : PENDING_DATA_REQUESTS.entrySet()) {
+      RuntimeState.PendingRequest pending = entry.getValue();
+      if (pending == null || !method.equalsIgnoreCase(pending.method)) continue;
+      if (!expectedPath.equals(requestPath(pending.url))) continue;
+      if (pending.startedAt < minStartedAt || pending.startedAt > maxStartedAt) continue;
+      if (candidate == null || pending.startedAt > candidate.getValue().startedAt) candidate = entry;
+    }
+    if (candidate == null) return false;
+    boolean removed = PENDING_DATA_REQUESTS.remove(candidate.getKey(), candidate.getValue());
+    if (removed && PENDING_DATA_REQUESTS.isEmpty()) lastDataActivityAt = 0;
+    return removed;
+  }
+
+  private static String requestPath(String rawUrl) {
+    if (rawUrl == null || rawUrl.isBlank()) return "";
+    try {
+      String path = java.net.URI.create(rawUrl).getPath();
+      return path == null ? "" : path;
+    } catch (IllegalArgumentException ignored) {
+      return "";
+    }
+  }
+
+  private static Long verifySubmittedRoleState(String listPath) {
+    boolean external = "/external/admin/authority-rights".equals(listPath);
+    String roleId = external ? rememberedRoleId : rememberedInternalRoleId;
+    String expectedDescription = external ? submittedExternalRoleDescription : submittedInternalRoleDescription;
+    if (roleId == null || expectedDescription == null) return null;
+    adminOpen(listPath + "/" + roleId + "/edit");
+    long deadline = System.currentTimeMillis() + 15000;
+    boolean matched = false;
+    while (System.currentTimeMillis() < deadline) {
+      SelenideElement field = external ? findDescriptionField() : findInternalRoleDescriptionField();
+      String observed = field.getValue() == null ? "" : field.getValue();
+      boolean rightsMatch = external || submittedInternalRoleRightsCount < 0
+        || currentInternalSelectedRightsCount() == submittedInternalRoleRightsCount;
+      if (expectedDescription.equals(observed) && rightsMatch) {
+        matched = true;
+        break;
+      }
+      sleep(250);
+    }
+    long verifiedAt = System.currentTimeMillis();
+    System.out.println("ROLE_STATE_VERIFY type=" + (external ? "external" : "internal")
+      + " matched=" + matched);
+    if (!matched) return null;
+    NetworkMockSupport.drainPerformanceLogs();
+    String expectedGetPath = "/api/" + (external ? "external" : "internal")
+      + "-authority-rights/" + roleId;
+    PENDING_DATA_REQUESTS.entrySet().removeIf(entry -> {
+      RuntimeState.PendingRequest pending = entry.getValue();
+      return pending != null && "GET".equalsIgnoreCase(pending.method)
+        && pending.url != null && pending.url.contains(expectedGetPath)
+        && pending.startedAt <= verifiedAt;
+    });
+    adminOpen(listPath);
+    return verifiedAt;
+  }
+
+  private static int currentInternalSelectedRightsCount() {
+    java.util.regex.Matcher matcher = java.util.regex.Pattern
+      .compile("(\\d+)\\s*/\\s*(\\d+)\\s*selected rights", java.util.regex.Pattern.CASE_INSENSITIVE)
+      .matcher(findRightsCounterText());
+    return matcher.find() ? Integer.parseInt(matcher.group(1)) : -1;
+  }
+
+  private static String roleFormState() {
+    Object state = executeJavaScript(
+      "const forms=[...document.querySelectorAll('form')];"
+        + "return JSON.stringify({formCount:forms.length,validFormCount:forms.filter(form=>form.checkValidity()).length,"
+        + "invalidControlCount:document.querySelectorAll(':invalid').length,"
+        + "authorityResourceCount:performance.getEntriesByType('resource')"
+        + ".filter(entry=>entry.name.includes('authority-rights')).length,"
+        + "apiResponseCount:(window.__roleSaveResponses||[]).length,"
+        + "visibleAlertCount:[...document.querySelectorAll('[role=alert],.alert,.invalid-feedback')]"
+        + ".filter(el=>el.offsetParent!==null).length});"
+    );
+    return String.valueOf(state);
+  }
+
+  private static SelenideElement firstVisibleEnabledRoleSave(String selector) {
+    for (SelenideElement candidate : $$(selector)) {
+        if (!candidate.isDisplayed() || !candidate.isEnabled()) continue;
+        if ("Save".equalsIgnoreCase(candidate.getText().trim())) {
+          return candidate;
+        }
+    }
+    return null;
+  }
+
   // ── Internal role edit round-trip state ──────────────────────
   private static String rememberedInternalRoleDescription = null;
   private static int rememberedSelectedRightsCount = 0;
   private static int rememberedTotalRightsCount = 0;
   private static String rememberedRemovedRightName = null;
+  private static String rememberedRemovedRightCode = null;
+  private static String rememberedInternalRoleId = null;
+  private static String submittedInternalRoleDescription = null;
+  private static int submittedInternalRoleRightsCount = -1;
+  private static boolean internalRoleServerStateDirty = false;
 
   @When("I find and open the observed internal role {string} editor")
   public void iFindAndOpenInternalRoleEditor(String roleName) {
@@ -3209,6 +3466,7 @@ public class AdminSteps {
     if (observedId == null || !observedId.matches("[0-9]+")) {
       throw new AssertionError("Role row has no numeric identity");
     }
+    rememberedInternalRoleId = observedId;
     adminOpen("/admin/authority-rights/" + observedId + "/edit");
     long deadline = System.currentTimeMillis() + 30000;
     while (System.currentTimeMillis() < deadline) {
@@ -3216,15 +3474,14 @@ public class AdminSteps {
       if (url != null && url.contains("/admin/authority-rights/" + observedId + "/edit")) break;
       sleep(300);
     }
-    System.out.println("  👁️  Internal role editor opened for '" + roleName + "' (id=" + observedId + ")");
+    System.out.println("  👁️  Internal role editor opened for the configured role");
   }
 
   private static SelenideElement findRoleOnCurrentPageInternal(String roleName) {
     SelenideElement table = visibleManagementTable();
     for (SelenideElement row : table.$$("tbody tr[id]")) {
       if (!row.isDisplayed()) continue;
-      String text = row.getText();
-      if (text != null && text.contains(roleName)) return row;
+      if (rowHasExactCellText(row, roleName)) return row;
     }
     return null;
   }
@@ -3233,10 +3490,9 @@ public class AdminSteps {
   public void theInternalRoleEditorShowsTheRole(String roleName) {
     String url = WebDriverRunner.url();
     if (url == null || !url.contains("/admin/authority-rights/") || !url.contains("/edit")) {
-      throw new AssertionError("Expected role editor route, got " + url);
+      throw new AssertionError("Expected internal role editor route");
     }
-    $("h1").shouldBe(visible);
-    $("form").shouldBe(visible);
+    awaitRoleEditorShell("/admin/authority-rights/" + rememberedInternalRoleId + "/edit");
     String body = waitForNonEmptyBodyText();
     boolean roleObserved = body != null && body.contains(roleName);
     for (SelenideElement field : $$("input, textarea")) {
@@ -3244,16 +3500,37 @@ public class AdminSteps {
       if (value != null && value.trim().equals(roleName)) roleObserved = true;
     }
     if (!roleObserved) {
-      throw new AssertionError("Role editor does not contain '" + roleName + "'");
+      throw new AssertionError("Internal role editor did not expose the configured role");
     }
-    System.out.println("  👁️  Internal role editor confirmed for " + roleName);
+    System.out.println("  👁️  Internal role editor confirmed for the configured role");
+  }
+
+  private static void awaitRoleEditorShell(String editorPath) {
+    long deadline = System.currentTimeMillis() + 20000;
+    boolean reopened = false;
+    while (System.currentTimeMillis() < deadline) {
+      SelenideElement heading = $("h1");
+      SelenideElement form = $("form");
+      if (heading.exists() && heading.isDisplayed() && form.exists() && form.isDisplayed()) return;
+      if (!reopened && System.currentTimeMillis() + 10000 >= deadline) {
+        adminOpen(editorPath);
+        reopened = true;
+      }
+      sleep(200);
+    }
+    throw new AssertionError("Role editor shell did not render on the observed editor route");
   }
 
   @When("I remember the internal role state")
   public void iRememberInternalRoleState() {
+    if (internalRoleServerStateDirty) {
+      throw new AssertionError("An earlier internal-role mutation still requires fixture cleanup");
+    }
+    internalRoleServerStateDirty = false;
+    rememberedRemovedRightCode = null;
     rememberedInternalRoleDescription = findInternalRoleDescriptionField().getValue();
     if (rememberedInternalRoleDescription == null) rememberedInternalRoleDescription = "";
-    System.out.println("  📝  Original Description: \"" + rememberedInternalRoleDescription + "\"");
+    System.out.println("  📝  Remembered the original internal role Description");
 
     // Parse the selected rights counter (e.g., "158/158 selected rights")
     java.util.regex.Matcher m = PAGINATION_PATTERN.matcher($("body").getText());
@@ -3266,7 +3543,7 @@ public class AdminSteps {
       rememberedTotalRightsCount = Integer.parseInt(m.group(2));
       System.out.println("  📋  Selected rights: " + rememberedSelectedRightsCount + "/" + rememberedTotalRightsCount);
     } else {
-      System.out.println("  ⚠️  Could not parse rights counter from: " + counterText.substring(0, Math.min(counterText.length(), 200)));
+      System.out.println("  ⚠️  Could not parse the structural rights counter");
     }
   }
 
@@ -3294,9 +3571,8 @@ public class AdminSteps {
     } else {
       modified = current + suffix;
     }
-    descField.clear();
-    descField.sendKeys(modified);
-    System.out.println("  📝  Modified Description: \"" + modified + "\"");
+    setAngularFieldValue(descField, modified);
+    System.out.println("  📝  Internal role Description modified");
   }
 
   @And("I check the first selected right checkbox")
@@ -3319,19 +3595,22 @@ public class AdminSteps {
       + "}"
       + "return JSON.stringify({clicked: false});");
 
-    System.out.println("  🔲  Checkbox click result: " + clicked);
     if (clicked != null && String.valueOf(clicked).contains("\"clicked\":true")) {
       String label = "";
       try {
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"label\":\"([^\"]+)\"").matcher(String.valueOf(clicked));
         if (m.find()) label = m.group(1);
       } catch (Throwable ignored) {}
+      try {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"name\":\"([^\"]+)\"").matcher(String.valueOf(clicked));
+        if (m.find()) rememberedRemovedRightCode = m.group(1);
+      } catch (Throwable ignored) {}
       rememberedRemovedRightName = label.isEmpty() ? "(selected right)" : label;
-      System.out.println("  🔲  Unchecking right: " + rememberedRemovedRightName);
+      System.out.println("  🔲  Selected one right for removal");
       sleep(500);
       return;
     }
-    throw new AssertionError("Could not find and click a checked right checkbox in the editor. Result: " + clicked);
+    throw new AssertionError("Could not find and click a checked right checkbox in the editor");
   }
 
   @Then("the Remove rights button becomes enabled")
@@ -3370,19 +3649,25 @@ public class AdminSteps {
   @When("I find and open the observed internal role {string} editor again")
   public void iFindAndOpenInternalRoleEditorAgain(String roleName) {
     assertAdminList("/admin/authority-rights", "Internal Roles");
-    SelenideElement targetRow = findRoleOnCurrentPageInternal(roleName);
-    if (targetRow == null) throw new AssertionError("Role '" + roleName + "' not found");
-    String observedId = targetRow.getAttribute("id");
-    if (observedId == null || !observedId.matches("[0-9]+")) {
-      throw new AssertionError("Role row has no numeric identity");
+    if (rememberedInternalRoleId == null || !rememberedInternalRoleId.matches("[0-9]+")) {
+      throw new AssertionError("No observed internal role identity was retained for reopening");
     }
-    adminOpen("/admin/authority-rights/" + observedId + "/edit");
+    adminOpen("/admin/authority-rights/" + rememberedInternalRoleId + "/edit");
     long deadline = System.currentTimeMillis() + 30000;
     while (System.currentTimeMillis() < deadline) {
       String url = WebDriverRunner.url();
-      if (url != null && url.contains("/admin/authority-rights/" + observedId + "/edit")) break;
+      if (url != null && url.contains("/admin/authority-rights/" + rememberedInternalRoleId + "/edit")) break;
       sleep(300);
     }
+    String persistedDescription = findInternalRoleDescriptionField().getValue();
+    int persistedRightsCount = currentInternalSelectedRightsCount();
+    if (submittedInternalRoleDescription == null
+        || !submittedInternalRoleDescription.equals(persistedDescription == null ? "" : persistedDescription)
+        || submittedInternalRoleRightsCount < 0
+        || submittedInternalRoleRightsCount != persistedRightsCount) {
+      throw new AssertionError("The internal role mutation was not persisted after reopening");
+    }
+    System.out.println("ROLE_STATE_VERIFY type=internal matched=true");
   }
 
   @When("I restore the internal role Description")
@@ -3390,35 +3675,29 @@ public class AdminSteps {
     if (rememberedInternalRoleDescription == null) {
       throw new AssertionError("No original Description was remembered");
     }
-    // Remove trailing "1"s that were appended by previous runs.
-    // The original Description was "Admin role for automated tests".
-    // Previous runs may have left "1" appended.
-    String toRestore = rememberedInternalRoleDescription;
-    while (toRestore.endsWith("1")) {
-      toRestore = toRestore.substring(0, toRestore.length() - 1);
-    }
     SelenideElement descField = findInternalRoleDescriptionField();
-    descField.clear();
-    descField.sendKeys(toRestore);
-    // Trigger Angular form update
-    executeJavaScript(
-      "const el = document.querySelector('form textarea, form input[formcontrolname*=description]');"
-      + "if (el) { el.dispatchEvent(new Event('input', {bubbles: true})); }");
-    System.out.println("  📝  Description restored to \"" + toRestore + "\"");
+    setAngularFieldValue(descField, rememberedInternalRoleDescription);
+    System.out.println("  📝  Description restored to its remembered value");
   }
 
   @And("I add the previously removed right back")
   public void iAddPreviouslyRemovedRightBack() {
     // Look for the right in the right column (available rights) and check it
-    System.out.println("  🔲  Adding back right: " + rememberedRemovedRightName);
+    System.out.println("  🔲  Restoring the previously removed right");
     // Try to find the unchecked checkbox for the removed right
+    String removedRightCode = rememberedRemovedRightCode == null || rememberedRemovedRightCode.isBlank()
+      ? rememberedRemovedRightName.split("[\\s\\u00a0(]", 2)[0]
+      : rememberedRemovedRightCode;
     for (SelenideElement cb : $$("form input[type=checkbox]")) {
       if (!cb.isDisplayed() || cb.isSelected()) continue;
       try {
         SelenideElement parent = $(cb).closest("label");
-        if (parent.exists()) {
-          String labelText = parent.getText().trim();
-          if (labelText.contains(rememberedRemovedRightName) || rememberedRemovedRightName.contains(labelText)) {
+        String labelText = parent.exists() ? parent.getText().trim() : "";
+        String checkboxName = cb.getAttribute("name");
+        if (checkboxName == null) checkboxName = "";
+        if (checkboxName.equals(removedRightCode)
+            || (!labelText.isBlank() && (labelText.contains(rememberedRemovedRightName)
+            || rememberedRemovedRightName.contains(labelText)))) {
             executeJavaScript("arguments[0].click()", cb.getWrappedElement());
             sleep(300);
             // Click "Add rights" arrow button
@@ -3426,82 +3705,248 @@ public class AdminSteps {
             if (addBtn.isDisplayed() && addBtn.isEnabled()) {
               addBtn.click();
               sleep(500);
-              System.out.println("  👁️  Added right back: " + rememberedRemovedRightName);
+              System.out.println("  👁️  Restored the previously removed right");
               return;
             }
-          }
         }
       } catch (Throwable ignored) {}
     }
-    // Alternative: just check the first unchecked checkbox and add
-    for (SelenideElement cb : $$("form input[type=checkbox]")) {
-      if (cb.isDisplayed() && !cb.isSelected()) {
-        executeJavaScript("arguments[0].click()", cb.getWrappedElement());
-        sleep(300);
-        SelenideElement addBtn = $("button[aria-label='Add rights']");
-        if (addBtn.isDisplayed() && addBtn.isEnabled()) {
-          addBtn.click();
-          sleep(500);
-          System.out.println("  👁️  Added a right back");
-          return;
-        }
-      }
-    }
-    throw new AssertionError("Could not add back removed right: " + rememberedRemovedRightName);
+    throw new AssertionError("Could not find the exact previously removed right to restore");
   }
 
   private static SelenideElement findInternalRoleDescriptionField() {
-    long deadline = System.currentTimeMillis() + 15000;
-    while (System.currentTimeMillis() < deadline) {
-      for (SelenideElement field : $$("textarea, input")) {
-        try {
-          if (!field.isDisplayed()) continue;
-          String name = field.getAttribute("name");
-          String placeholder = field.getAttribute("placeholder");
-          String id = field.getAttribute("id");
-          if ((name != null && name.toLowerCase(java.util.Locale.ROOT).contains("description"))
-              || (placeholder != null && placeholder.toLowerCase(java.util.Locale.ROOT).contains("description"))
-              || (id != null && id.toLowerCase(java.util.Locale.ROOT).contains("description"))) {
-            return field;
-          }
-        } catch (Throwable ignored) {}
+    for (int loadAttempt = 1; loadAttempt <= 2; loadAttempt++) {
+      long deadline = System.currentTimeMillis() + 20000;
+      while (System.currentTimeMillis() < deadline) {
+        SelenideElement field = visibleInternalRoleDescriptionField();
+        if (field != null) return field;
+        sleep(250);
       }
-      for (SelenideElement field : $$("textarea")) {
-        try {
-          if (field.isDisplayed()) return field;
-        } catch (Throwable ignored) {}
+      if (loadAttempt == 1) {
+        System.out.println("  ↻ Internal role editor detail did not render; refreshing the idempotent edit route once");
+        refresh();
       }
-      sleep(250);
     }
-    throw new AssertionError("No visible Description field found in the internal role editor after 15s");
+    throw new AssertionError("No visible Description field found in the internal role editor after one targeted reload");
+  }
+
+  private static SelenideElement visibleInternalRoleDescriptionField() {
+    SelenideElement labelled = $("label[for=descriptionLarge]");
+    if (labelled.exists()) {
+      SelenideElement field = $("#descriptionLarge");
+      if (field.exists() && field.isDisplayed() && field.isEnabled()) return field;
+    }
+    for (SelenideElement field : $$("textarea, input")) {
+      try {
+        if (!field.isDisplayed()) continue;
+        String name = field.getAttribute("name");
+        String placeholder = field.getAttribute("placeholder");
+        String id = field.getAttribute("id");
+        String formControlName = field.getAttribute("formcontrolname");
+        String dataCy = field.getAttribute("data-cy");
+        if ((name != null && name.toLowerCase(java.util.Locale.ROOT).contains("description"))
+            || (placeholder != null && placeholder.toLowerCase(java.util.Locale.ROOT).contains("description"))
+            || (id != null && id.toLowerCase(java.util.Locale.ROOT).contains("description"))
+            || (formControlName != null && formControlName.toLowerCase(java.util.Locale.ROOT).contains("description"))
+            || (dataCy != null && dataCy.toLowerCase(java.util.Locale.ROOT).contains("description"))) return field;
+      } catch (Throwable ignored) {}
+    }
+    for (SelenideElement field : $$("textarea")) {
+      try {
+        if (field.isDisplayed()) return field;
+      } catch (Throwable ignored) {}
+    }
+    return null;
   }
 
   @And("I click {string} on the internal role editor")
   public void iClickSaveOnInternalRoleEditor(String buttonLabel) {
-    SelenideElement save = $("button[type=submit]").shouldBe(visible).shouldBe(enabled);
-    save.click();
-    System.out.println("  👁️  Clicked '" + buttonLabel + "' on internal role editor");
+    boolean restoredState = internalRoleEditorMatchesRememberedState();
+    submittedInternalRoleDescription = findInternalRoleDescriptionField().getValue();
+    submittedInternalRoleRightsCount = currentInternalSelectedRightsCount();
+    if (!restoredState) internalRoleServerStateDirty = true;
+    saveRoleAndReturnToList(buttonLabel, "/admin/authority-rights");
+    if (restoredState) internalRoleServerStateDirty = false;
+  }
 
-    // Wait for redirect back to the list page
+  static void restoreInterruptedInternalRoleState() {
+    if (!internalRoleServerStateDirty || rememberedInternalRoleId == null
+        || rememberedInternalRoleDescription == null) return;
+    try {
+      adminOpen("/admin/authority-rights/" + rememberedInternalRoleId + "/edit");
+      findInternalRoleDescriptionField();
+      iRestoreRememberedInternalRoleDescriptionForCleanup();
+      if (!internalRoleRightsMatchRememberedCount()) {
+        addRememberedInternalRightForCleanup();
+      }
+      if (!internalRoleEditorMatchesRememberedState()) {
+        throw new AssertionError("Internal role cleanup could not reconstruct the remembered state");
+      }
+      submittedInternalRoleDescription = rememberedInternalRoleDescription;
+      submittedInternalRoleRightsCount = rememberedSelectedRightsCount;
+      saveRoleAndReturnToList("Save", "/admin/authority-rights");
+      NetworkBusinessWaitRepair.waitForBusinessData();
+      internalRoleServerStateDirty = false;
+      System.out.println("  👁️  Restored interrupted internal-role fixture state");
+    } catch (Throwable failure) {
+      throw new AssertionError("Failed to restore interrupted internal-role fixture state", failure);
+    }
+  }
+
+  static void restoreInterruptedExternalRoleState() {
+    if (!externalRoleServerStateDirty || rememberedRoleId == null
+        || rememberedRoleDescription == null) return;
+    try {
+      adminOpen("/external/admin/authority-rights/" + rememberedRoleId + "/edit");
+      refresh();
+      String current = awaitExternalRoleDescriptionValue();
+      if (sameRoleDescription(rememberedRoleDescription, current)) {
+        externalRoleServerStateDirty = false;
+        return;
+      }
+      setExternalRoleDescriptionForCleanup(rememberedRoleDescription);
+      submittedExternalRoleDescription = rememberedRoleDescription;
+      try {
+        saveRoleAndReturnToList("Save", "/external/admin/authority-rights");
+      } catch (Throwable saveFailure) {
+        // The live endpoint can return HTTP 500 after applying the mutation.
+        // Re-read through a fresh editor before deciding cleanup failed.
+        adminOpen("/external/admin/authority-rights/" + rememberedRoleId + "/edit");
+        refresh();
+        String observed = awaitExternalRoleDescriptionValue();
+        if (!sameRoleDescription(rememberedRoleDescription, observed)) throw saveFailure;
+        long verifiedAt = System.currentTimeMillis();
+        NetworkMockSupport.drainPerformanceLogs();
+        String expectedPath = "/api/external-authority-rights/" + rememberedRoleId;
+        PENDING_DATA_REQUESTS.entrySet().removeIf(entry -> {
+          RuntimeState.PendingRequest pending = entry.getValue();
+          return pending != null && pending.url != null && pending.url.contains(expectedPath)
+            && pending.startedAt <= verifiedAt;
+        });
+      }
+      NetworkBusinessWaitRepair.waitForBusinessData();
+      externalRoleServerStateDirty = false;
+      System.out.println("  👁️  Restored interrupted external-role fixture state");
+    } catch (Throwable failure) {
+      throw new AssertionError("Failed to restore interrupted external-role fixture state", failure);
+    }
+  }
+
+  private static String awaitExternalRoleDescriptionValue() {
     long deadline = System.currentTimeMillis() + 30000;
     while (System.currentTimeMillis() < deadline) {
-      String url = WebDriverRunner.url();
-      if (url != null && url.contains("/admin/authority-rights") && !url.contains("/edit")) {
-        System.out.println("  👁️  Returned to internal roles list after save");
-        return;
-      }
-      sleep(300);
+      try {
+        SelenideElement field = correlatedExternalRoleDescriptionField();
+        if (field != null && field.isDisplayed()) {
+          String value = field.getValue();
+          return value == null ? "" : value;
+        }
+      } catch (Throwable ignored) {}
+      sleep(100);
     }
-    // Check for success message on the current page
-    try {
-      String body = $("body").getText();
-      if (body != null && (body.toLowerCase(java.util.Locale.ROOT).contains("saved")
-          || body.toLowerCase(java.util.Locale.ROOT).contains("success"))) {
-        System.out.println("  👁️  Save confirmed via success message");
-        return;
+    throw new AssertionError("External role Description field did not render for cleanup");
+  }
+
+  private static void setExternalRoleDescriptionForCleanup(String value) {
+    Throwable lastFailure = null;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        SelenideElement field = correlatedExternalRoleDescriptionField();
+        if (field == null) throw new AssertionError("The correlated external role Description control is unavailable");
+        if (!field.isDisplayed() || !field.isEnabled()) {
+          throw new AssertionError("The correlated external role Description control is not editable");
+        }
+        setAngularFieldValue(field, value);
+        String observed = field.getValue() == null ? "" : field.getValue();
+        if (sameRoleDescription(value, observed)) return;
+      } catch (Throwable failure) {
+        lastFailure = failure;
       }
-    } catch (Throwable ignored) { }
-    System.out.println("  👁️  Save clicked, current URL=" + WebDriverRunner.url());
+      sleep(250);
+    }
+    throw new AssertionError("External role Description could not be restored in the editor", lastFailure);
+  }
+
+  private static SelenideElement correlatedExternalRoleDescriptionField() {
+    List<SelenideElement> fields = new ArrayList<>();
+    $$("textarea,input").forEach(fields::add);
+    for (SelenideElement field : fields) {
+      try {
+        if (!field.isDisplayed()) continue;
+      } catch (Throwable ignored) {
+        continue;
+      }
+      if (sameNonBlankAttribute(rememberedRoleDescriptionFieldId, field.getAttribute("id"))
+          || sameNonBlankAttribute(rememberedRoleDescriptionFieldName, field.getAttribute("name"))
+          || sameNonBlankAttribute(rememberedRoleDescriptionFormControlName, field.getAttribute("formcontrolname"))
+          || sameNonBlankAttribute(rememberedRoleDescriptionDataCy, field.getAttribute("data-cy"))) {
+        return field;
+      }
+    }
+    if (rememberedRoleDescriptionFieldIndex >= 0 && rememberedRoleDescriptionFieldIndex < fields.size()) {
+      SelenideElement indexed = fields.get(rememberedRoleDescriptionFieldIndex);
+      try {
+        if (indexed.isDisplayed()) return indexed;
+      } catch (Throwable ignored) {}
+    }
+    try {
+      return findDescriptionField();
+    } catch (Throwable ignored) {
+      return null;
+    }
+  }
+
+  private static boolean sameNonBlankAttribute(String expected, String observed) {
+    return expected != null && !expected.isBlank() && expected.equals(observed);
+  }
+
+  private static boolean sameRoleDescription(String expected, String observed) {
+    return normalizeRoleDescription(expected).equals(normalizeRoleDescription(observed));
+  }
+
+  private static String normalizeRoleDescription(String value) {
+    return value == null ? "" : value.replace("\r\n", "\n").replace('\r', '\n');
+  }
+
+  private static void iRestoreRememberedInternalRoleDescriptionForCleanup() {
+    setAngularFieldValue(findInternalRoleDescriptionField(), rememberedInternalRoleDescription);
+  }
+
+  private static void addRememberedInternalRightForCleanup() {
+    if (rememberedRemovedRightCode == null || rememberedRemovedRightCode.isBlank()) {
+      throw new AssertionError("No exact removed-right code was remembered for cleanup");
+    }
+    for (SelenideElement cb : $$("form input[type=checkbox]")) {
+      String checkboxName = cb.getAttribute("name");
+      if (!cb.isDisplayed() || cb.isSelected()
+          || !rememberedRemovedRightCode.equals(checkboxName == null ? "" : checkboxName)) continue;
+      executeJavaScript("arguments[0].click()", cb.getWrappedElement());
+      SelenideElement addBtn = $("button[aria-label='Add rights']");
+      if (!addBtn.isDisplayed() || !addBtn.isEnabled()) {
+        throw new AssertionError("Add rights did not enable during fixture cleanup");
+      }
+      addBtn.click();
+      sleep(500);
+      return;
+    }
+    throw new AssertionError("Exact removed right was not available during fixture cleanup");
+  }
+
+  private static boolean internalRoleEditorMatchesRememberedState() {
+    if (rememberedInternalRoleDescription == null) return false;
+    String description = findInternalRoleDescriptionField().getValue();
+    return rememberedInternalRoleDescription.equals(description == null ? "" : description)
+      && internalRoleRightsMatchRememberedCount();
+  }
+
+  private static boolean internalRoleRightsMatchRememberedCount() {
+    if (rememberedSelectedRightsCount <= 0) return false;
+    java.util.regex.Matcher matcher = java.util.regex.Pattern
+      .compile("(\\d+)\\s*/\\s*(\\d+)\\s*selected rights", java.util.regex.Pattern.CASE_INSENSITIVE)
+      .matcher(findRightsCounterText());
+    return matcher.find()
+      && Integer.parseInt(matcher.group(1)) == rememberedSelectedRightsCount
+      && Integer.parseInt(matcher.group(2)) == rememberedTotalRightsCount;
   }
 
   @And("the persons search result list contains {string}")

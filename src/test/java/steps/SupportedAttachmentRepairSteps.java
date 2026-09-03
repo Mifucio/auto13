@@ -24,6 +24,7 @@ import static com.codeborne.selenide.Selenide.sleep;
 public final class SupportedAttachmentRepairSteps {
   private static final String FIXTURE = "/fixtures/ca22-disposable-attachment.pdf";
   private static final Path DOWNLOADS = Path.of("build", "supported-attachment-downloads").toAbsolutePath().normalize();
+  private static final Path BROWSER_DOWNLOADS = Path.of("build", "downloads").toAbsolutePath().normalize();
   private String attachmentName = "";
   private String acceptedTypes = "";
   private Path downloaded;
@@ -75,27 +76,33 @@ public final class SupportedAttachmentRepairSteps {
 
     String previousFolder = Configuration.downloadsFolder;
     FileDownloadMode previousMode = Configuration.fileDownload;
+    long downloadStartedAt = System.currentTimeMillis();
     try {
       Configuration.downloadsFolder = DOWNLOADS.toString();
       Configuration.fileDownload = FileDownloadMode.FOLDER;
       java.io.File returned = null;
-      try { returned = control.download(); }
-      catch (Throwable failure) {
-        // Rerendering can stale the first control. Re-resolve once by filename.
-        SelenideElement fresh = attachmentDownloadControl();
-        try { returned = fresh.download(); }
-        catch (Throwable ignored) {
-          try { executeJavaScript("arguments[0].click();", fresh.getWrappedElement()); }
-          catch (Throwable ignoredAgain) { }
+      String href = clean(control.getAttribute("href"));
+      if (href.isBlank()) {
+        // The live attachment filename action has no href and downloads through
+        // an Angular click handler. The browser download directory was fixed at
+        // driver startup, so changing Configuration.downloadsFolder now does
+        // not redirect this download.
+        executeJavaScript("arguments[0].click();", control.getWrappedElement());
+      } else {
+        try { returned = control.download(); }
+        catch (Throwable failure) {
+          SelenideElement fresh = attachmentDownloadControl();
+          executeJavaScript("arguments[0].click();", fresh.getWrappedElement());
         }
       }
-      if (returned != null && returned.isFile() && returned.length() > 0) {
+      if (returned != null && isExpectedAttachmentArtifact(returned.toPath())) {
         downloaded = returned.toPath().toAbsolutePath().normalize();
         return;
       }
       long deadline = System.currentTimeMillis() + 10000;
       while (System.currentTimeMillis() < deadline) {
-        Path file = firstNonEmptyFile(DOWNLOADS);
+        Path file = firstExpectedAttachmentFile(DOWNLOADS, 0);
+        if (file == null) file = firstExpectedAttachmentFile(BROWSER_DOWNLOADS, downloadStartedAt - 1000);
         if (file != null) { downloaded = file; return; }
         sleep(150);
       }
@@ -108,8 +115,8 @@ public final class SupportedAttachmentRepairSteps {
 
   @Then("the supported PDF fixture download exists")
   public void supportedPdfDownloadExists() {
-    if (downloaded == null || !Files.isRegularFile(downloaded) || downloaded.toFile().length() <= 0) {
-      throw new AssertionError("Supported PDF fixture download is missing or empty");
+    if (downloaded == null || !isExpectedAttachmentArtifact(downloaded)) {
+      throw new AssertionError("Supported PDF fixture download is missing or differs from the uploaded fixture");
     }
   }
 
@@ -199,10 +206,24 @@ public final class SupportedAttachmentRepairSteps {
     } catch (Exception error) { throw new AssertionError("Could not resolve supported PDF fixture", error); }
   }
 
-  private static Path firstNonEmptyFile(Path directory) {
+  private static Path firstExpectedAttachmentFile(Path directory, long earliestModified) {
     try (var stream = Files.walk(directory)) {
-      return stream.filter(Files::isRegularFile).filter(path -> path.toFile().length() > 0).findFirst().orElse(null);
+      return stream.filter(Files::isRegularFile)
+        .filter(path -> !path.getFileName().toString().endsWith(".crdownload"))
+        .filter(path -> path.toFile().lastModified() >= earliestModified)
+        .filter(SupportedAttachmentRepairSteps::isExpectedAttachmentArtifact)
+        .max(Comparator.comparingLong(path -> path.toFile().lastModified()))
+        .orElse(null);
     } catch (Exception ignored) { return null; }
+  }
+
+  private static boolean isExpectedAttachmentArtifact(Path path) {
+    try {
+      return Files.isRegularFile(path) && Files.size(path) > 0
+        && Files.mismatch(path, fixturePath()) == -1;
+    } catch (Exception ignored) {
+      return false;
+    }
   }
 
   private static void clearDirectory(Path directory) {

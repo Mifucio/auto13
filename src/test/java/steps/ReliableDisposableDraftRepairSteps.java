@@ -35,6 +35,7 @@ public final class ReliableDisposableDraftRepairSteps {
 
   @When("I reliably save the prepared disposable application as draft")
   public void reliablySavePreparedDraft() throws Exception {
+    selectNoDividendExcludedAccounts();
     normalizeBlankDividendExcludedRows();
     repair.safelySavePreparedDraft();
   }
@@ -53,6 +54,12 @@ public final class ReliableDisposableDraftRepairSteps {
     CustomerRepairSteps.ensureCustomerEnglishIfPresent();
     if (DIVIDEND_PAYMENT.equalsIgnoreCase(type)) {
       flow.selectSourceInstrument();
+      flow.setPaymentPerSecurity("1");
+      flow.verifyTotalFormula();
+      flow.setGeneralMeetingDate();
+      flow.setNetDividendAmount();
+      flow.setExDate();
+      selectNoDividendExcludedAccounts();
       normalizeBlankDividendExcludedRows();
       repair.safelySavePreparedDraft();
       return;
@@ -147,6 +154,14 @@ public final class ReliableDisposableDraftRepairSteps {
         throw new AssertionError("Dividend excluded-account placeholder became populated unexpectedly: " + rowId);
       }
     }
+  }
+
+  private static void selectNoDividendExcludedAccounts() {
+    SelenideElement no = $("input[type=radio][name='dp_exclude_own_shares'][value='1']");
+    if (!no.exists() || !no.isDisplayed() || !no.isEnabled() || no.isSelected()) return;
+    executeJavaScript("arguments[0].click();", no.getWrappedElement());
+    long deadline = System.currentTimeMillis() + 2000;
+    while (System.currentTimeMillis() < deadline && !no.isSelected()) sleep(100);
   }
 
   private static boolean isBlankRow(SelenideElement row) {
