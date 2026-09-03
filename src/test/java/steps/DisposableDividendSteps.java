@@ -313,7 +313,7 @@ public final class DisposableDividendSteps {
       }
 // Switch via the navbar dropdown → Switch Company modal (deep-linking
       // Direct access: open the SPA /company-selection route and pick the company card
-      if (!tryDirectCompanySelection(company)) {
+      if (!tryAuthenticatedCompanySelection(company)) {
         throw new AssertionError("Direct company selection did not establish '"
           + company + "'; url=" + webdriver().driver().url());
       }
@@ -331,7 +331,7 @@ public final class DisposableDividendSteps {
           requireDirectLithuanianCompany(company);
           return;
         }
-        if (tryDirectCompanySelection(company)) {
+        if (tryAuthenticatedCompanySelection(company)) {
           persistSessionCookies();
           return;
         }
@@ -346,7 +346,7 @@ public final class DisposableDividendSteps {
             requireDirectLithuanianCompany(company);
             return;
           }
-          if (!tryDirectCompanySelection(company)) {
+          if (!tryAuthenticatedCompanySelection(company)) {
             throw new AssertionError("Direct company selection did not establish '"
               + company + "'; url=" + webdriver().driver().url());
           }
@@ -385,8 +385,8 @@ public final class DisposableDividendSteps {
   private boolean tryDirectCompanySelection(String company) {
     System.out.println("DISPOSABLE_COMPANY_DIRECT_ATTEMPT requested=" + company
       + " url=" + webdriver().driver().url());
+    String before = webdriver().driver().url();
     try {
-      String before = webdriver().driver().url();
       open("/company-selection");
       sleep(800);
       long deadline = System.currentTimeMillis() + 8000;
@@ -409,8 +409,19 @@ public final class DisposableDividendSteps {
       return false;
     } catch (Throwable failure) {
       System.out.println("DISPOSABLE_COMPANY_DIRECT_SELECT_FAILED " + failure.getClass().getSimpleName());
+      if (before != null && !before.isBlank()) {
+        try {
+          open(before);
+          sleep(500);
+        } catch (Throwable ignored) { }
+      }
       return false;
     }
+  }
+
+  private boolean tryAuthenticatedCompanySelection(String company) {
+    if (switchCompanyViaMenu(company)) return true;
+    return tryDirectCompanySelection(company);
   }
 
   private void pickCompanyCardViaJs(String company) {
@@ -643,6 +654,18 @@ public final class DisposableDividendSteps {
       // menu control rather than bypassing it with a deep link.
       refresh();
       controls = awaitExactVisibleControls("Corporate Actions", 15000);
+    }
+    if (controls.isEmpty()) {
+      // Some represented-company switches settle on a sparse authenticated
+      // route that has the selected-company control but no application menu.
+      // Re-enter a stable customer shell, then still open Corporate Actions
+      // through the genuine navbar control required by this scenario.
+      SelenideElement represented = $("#navbarRepresentedDropdown");
+      if (represented.exists() && represented.isDisplayed()
+          && !normalize(represented.getText()).isBlank()) {
+        open("/holders-information");
+        controls = awaitExactVisibleControls("Corporate Actions", 15000);
+      }
     }
     if (controls.size() != 1) {
       throw new AssertionError("Expected one interactive Corporate Actions menu control before opening, found " + controls.size());
