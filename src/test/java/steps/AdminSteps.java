@@ -3325,7 +3325,7 @@ public class AdminSteps {
     int status = Integer.parseInt(statusMatcher.group(1));
     String path = pathMatcher.group(1);
     long completedAt = Long.parseLong(timeMatcher.group(1));
-    if (expectedRoleId == null || !path.contains(expectedApiPath)) {
+    if (expectedRoleId == null || (!path.equals(expectedApiPath) && !path.endsWith(expectedApiPath))) {
       throw new AssertionError("Role editor response evidence did not match the current save target");
     }
     if (status < 200 || status >= 300) {
