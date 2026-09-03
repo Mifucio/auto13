@@ -796,8 +796,12 @@ public final class AuthSupport {
                 if (!stillOnLogin || failedSignIn) break;
                 sleep(250);
               }
-              if (!stillOnLogin || !failedSignIn) break;
-              System.out.println("  [admin-submit] server returned 'Failed to sign in', retrying...");
+              if (!stillOnLogin) break;
+              if (failedSignIn) {
+                System.out.println("  [admin-submit] server returned 'Failed to sign in', retrying...");
+              } else {
+                System.out.println("  [admin-submit] login page did not transition, retrying...");
+              }
             }
           }
         } else {
@@ -1941,7 +1945,15 @@ public final class AuthSupport {
       }
       if (manualSignIn == null) {
         String current = WebDriverRunner.url();
-        if (current != null && !current.contains("/login")) return;
+        String currentBody = "";
+        try { currentBody = $("body").shouldBe(visible).getText().toLowerCase(java.util.Locale.ROOT); }
+        catch (Throwable ignored) { }
+        boolean protectedLandmark = current != null && !current.contains("/login")
+          && ($("#navbarProfileDropdown").isDisplayed()
+            || currentBody.contains("management") || currentBody.contains("corporate actions")
+            || currentBody.contains("welcome back"));
+        if (protectedLandmark) return;
+        if (attempt < 5) continue;
         throw new AssertionError("Admin login page did not expose the Sign in manually control");
       }
       manualSignIn.click();
@@ -1977,8 +1989,12 @@ public final class AuthSupport {
           if (!stillOnLogin || failedSignIn) break;
           sleep(250);
         }
-        if (!stillOnLogin || !failedSignIn) return;
-        System.out.println("  [admin-login] server returned 'Failed to sign in', retrying...");
+        if (!stillOnLogin) return;
+        if (failedSignIn) {
+          System.out.println("  [admin-login] server returned 'Failed to sign in', retrying...");
+        } else {
+          System.out.println("  [admin-login] login page did not transition, retrying...");
+        }
       }
     }
   }

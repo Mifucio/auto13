@@ -671,8 +671,22 @@ public final class DisposableDividendSteps {
       throw new AssertionError("Expected one interactive Corporate Actions menu control before opening, found " + controls.size());
     }
     controls.get(0).click();
-    sleep(300);
-    List<SelenideElement> openedControls = exactVisible("Corporate Actions", "a, button, [role=button]");
+    long submenuDeadline = System.currentTimeMillis() + 5000;
+    long reopenAt = System.currentTimeMillis() + 1000;
+    List<SelenideElement> openedControls = List.of();
+    boolean reopened = false;
+    while (System.currentTimeMillis() < submenuDeadline) {
+      openedControls = exactVisible("Corporate Actions", "a, button, [role=button]");
+      if (openedControls.size() >= 2) break;
+      if (!reopened && System.currentTimeMillis() >= reopenAt) {
+        List<SelenideElement> collapsedControls = exactVisible("Corporate Actions", "a, button, [role=button]");
+        if (collapsedControls.size() == 1) {
+          collapsedControls.get(0).click();
+          reopened = true;
+        }
+      }
+      sleep(150);
+    }
     if (openedControls.size() < 2) {
       throw new AssertionError("Corporate Actions dropdown did not expose its Corporate Actions submenu; found " + openedControls.size());
     }
