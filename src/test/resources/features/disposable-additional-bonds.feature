@@ -1,6 +1,20 @@
 @req:CA-23 @req:CA-25 @req:CA-26 @req:CA-29 @direct_disposable_aib
 Feature: Create, sign and review the disposable Additional issuance of Bonds application
 
+  @aib_paid_up_yes
+  Scenario: Create and preserve one disposable Additional issuance of Bonds draft on the Yes paid-up branch
+    Given I log in through Mobile ID for the disposable application
+    And I select and verify company "AutotestLtSingleSignee" for the disposable application
+    And I ensure customer application language is English
+    When I open Corporate Actions from the customer menu
+    And I click Create Application
+    And I choose the observed "Additional issuance of Bonds" application type
+    Then the Application data form must be visible
+    When I fill and safely save the disposable Additional issuance of Bonds form on the Yes paid-up branch
+    Then the Sign Document button must be visible
+    And I persist the disposable application ID and remembered source instrument
+    And I remember this disposable "Additional issuance of Bonds" draft for read-only scenarios
+
   Scenario: Create and preserve one disposable Additional issuance of Bonds draft
     Given I log in through Mobile ID for the disposable application
     And I select and verify company "AutotestLtSingleSignee" for the disposable application
