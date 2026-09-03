@@ -37,6 +37,16 @@ import static steps.RuntimeState.*;
 
 public final class NetworkMockSupport {
 
+  static void resetScenarioNetworkState() {
+    // Consume any events left by the previous scenario before resetting its
+    // request lifecycle. New requests triggered by the scenario's initial
+    // navigation are recorded by the next BeforeStep drain.
+    drainPerformanceLogs();
+    PENDING_DATA_REQUESTS.clear();
+    lastDataActivityAt = 0;
+    NetworkBusinessWaitRepair.resetRenderedEvidence();
+  }
+
   static void drainPerformanceLogs() {
     if (!WebDriverRunner.hasWebDriverStarted()) return;
     try {
@@ -53,12 +63,30 @@ public final class NetworkMockSupport {
           if (!"XHR".equalsIgnoreCase(type) && !"Fetch".equalsIgnoreCase(type)) continue;
           JsonObject request = params.getAsJsonObject("request");
           String url = request != null && request.has("url") ? request.get("url").getAsString() : "unknown";
-          PENDING_DATA_REQUESTS.put(requestId, new PendingRequest(url, System.currentTimeMillis()));
+          String requestMethod = request != null && request.has("method") ? request.get("method").getAsString() : "";
+          // Performance logs are drained after a step, so this event may have
+          // occurred well before it is processed here. Preserve the browser log
+          // timestamp so Resource Timing completion evidence can be correlated
+          // with the real request start instead of the later drain time.
+          long requestStartedAt = entry.getTimestamp();
+          if (requestStartedAt <= 0) requestStartedAt = System.currentTimeMillis();
+          PENDING_DATA_REQUESTS.put(requestId, new PendingRequest(url, requestMethod, requestStartedAt));
           lastDataActivityAt = System.currentTimeMillis();
+        } else if ("Network.responseReceived".equals(method)) {
+          PendingRequest pending = PENDING_DATA_REQUESTS.get(requestId);
+          JsonObject response = params.getAsJsonObject("response");
+          if (pending != null && response != null && response.has("status")) {
+            pending.responseStatus = response.get("status").getAsInt();
+            long responseReceivedAt = entry.getTimestamp();
+            pending.responseReceivedAt = responseReceivedAt > 0
+              ? responseReceivedAt : System.currentTimeMillis();
+          }
         } else if ("Network.loadingFinished".equals(method) || "Network.loadingFailed".equals(method)) {
           PendingRequest pending = PENDING_DATA_REQUESTS.remove(requestId);
           if (pending != null) {
-            long durationMs = System.currentTimeMillis() - pending.startedAt;
+            long completedAt = entry.getTimestamp();
+            if (completedAt <= 0) completedAt = System.currentTimeMillis();
+            long durationMs = Math.max(0, completedAt - pending.startedAt);
             PERFORMANCE_RESULTS.add("{\"type\":\"external-data\",\"url\":\"" + jsonEscape(pending.url) + "\",\"durationMs\":" + durationMs + ",\"slow\":" + (durationMs > EXTERNAL_SLOW_MS) + "}");
             lastDataActivityAt = System.currentTimeMillis();
           }
@@ -66,6 +94,27 @@ public final class NetworkMockSupport {
       }
     } catch (Exception e) {
       System.err.println("  ⚠️  Performance log read failed: " + e.getMessage());
+    }
+  }
+
+  /**
+   * Prove completion of one exact Chrome request when the performance log has a
+   * responseReceived event but omits loadingFinished. CDP exposes the response
+   * body only after the body is fully available, and the request id prevents a
+   * duplicate same-URL request from satisfying this probe.
+   */
+  static boolean hasCompletedResponseBody(String requestId) {
+    if (requestId == null || requestId.isBlank() || !WebDriverRunner.hasWebDriverStarted()) return false;
+    WebDriver driver = WebDriverRunner.getWebDriver();
+    if (!(driver instanceof org.openqa.selenium.devtools.HasDevTools hasDevTools)) return false;
+    try {
+      org.openqa.selenium.devtools.DevTools devTools = hasDevTools.getDevTools();
+      devTools.createSessionIfThereIsNotOne();
+      devTools.send(org.openqa.selenium.devtools.v127.network.Network.getResponseBody(
+        new org.openqa.selenium.devtools.v127.network.model.RequestId(requestId)));
+      return true;
+    } catch (Throwable ignored) {
+      return false;
     }
   }
 

@@ -41,6 +41,8 @@ public class StepDefinitions {
 
   @Before
   public void beforeScenario(Scenario scenario) {
+    clearObservedLoginScenarioState();
+    resetScenarioNetworkState();
     CONSOLE_LOGS.clear();
     SCENARIO_CHECKPOINT_OCCURRENCES.clear();
     scenarioStartedAt = System.currentTimeMillis();
@@ -118,6 +120,21 @@ public class StepDefinitions {
       } catch (Exception e) {
         // Browser may not support or already closed
       }
+    }
+    Throwable cleanupFailure = null;
+    try {
+      AdminSteps.restoreInterruptedExternalRoleState();
+    } catch (Throwable failure) {
+      cleanupFailure = failure;
+    }
+    try {
+      AdminSteps.restoreInterruptedInternalRoleState();
+    } catch (Throwable failure) {
+      if (cleanupFailure == null) cleanupFailure = failure;
+      else cleanupFailure.addSuppressed(failure);
+    }
+    if (cleanupFailure != null) {
+      throw new AssertionError("Scenario fixture cleanup failed", cleanupFailure);
     }
   }
 

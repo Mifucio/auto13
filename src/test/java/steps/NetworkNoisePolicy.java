@@ -14,16 +14,24 @@ final class NetworkNoisePolicy {
     "/services/holdersinformation/message-hub/GetShareholderDisclosureRequestsForMe";
   private static final String ADMIN_ANNOUNCEMENTS_PATH =
     "/services/corporate-actions/api/internal-user-announcements";
+  private static final String ADMIN_GATEWAY_ANNOUNCEMENTS_PATH =
+    "/services/gateway/api/internal-user-announcements";
+  private static final String EXTERNAL_NOTIFICATIONS_PATH =
+    "/services/external-users/api/notifications";
+  private static final String EXTERNAL_EVENTS_PATH =
+    "/services/external-users/api/events";
+  private static final String EXTERNAL_ANNOUNCEMENTS_PATH =
+    "/services/external-users/api/external-user-announcements";
+  private static final String EXTERNAL_LOGIN_ANNOUNCEMENTS_PATH =
+    "/services/external-users/api/external-login-announcements";
+  private static final String APP_CONFIG_PATH = "/api/config";
   private static final String ADMIN_USERS_PATH =
     "/services/admin/sales-and-services-users";
-  // The admin list's CSD-user assignment is persisted asynchronously. It is
-  // not a prerequisite for the customer attachment flow, and the live service
-  // can leave this request pending after the assignment has been applied.
-  private static final String ADMIN_CSD_USER_UPDATE_PATH =
-    "/services/gateway/api/application/update-csd-user";
   private static final Pattern DOKOBIT_AUTH_NAVIGATION =
     Pattern.compile("https://id-sandbox\\.dokobit\\.com/auth/[^?]+(?:\\?.*)?");
   private static final Pattern STATIC_I18N = Pattern.compile(".*/i18n/[^/?]+\\.json(?:\\?.*)?$");
+  private static final Pattern DOKOBIT_STATIC_TRANSLATIONS =
+    Pattern.compile("https://id-sandbox\\.dokobit\\.com/js/translations/translations\\.js(?:\\?.*)?");
 
   private NetworkNoisePolicy() { }
 
@@ -36,10 +44,16 @@ final class NetworkNoisePolicy {
       if (url.contains(TRANSLATIONS_PATH)
           || url.contains(DISCLOSURE_POLL_PATH)
           || url.contains(ADMIN_ANNOUNCEMENTS_PATH)
+          || url.contains(ADMIN_GATEWAY_ANNOUNCEMENTS_PATH)
+          || url.contains(EXTERNAL_NOTIFICATIONS_PATH)
+          || url.contains(EXTERNAL_EVENTS_PATH)
+          || url.contains(EXTERNAL_ANNOUNCEMENTS_PATH)
+          || url.contains(EXTERNAL_LOGIN_ANNOUNCEMENTS_PATH)
+          || url.contains(APP_CONFIG_PATH)
           || url.contains(ADMIN_USERS_PATH)
-          || url.contains(ADMIN_CSD_USER_UPDATE_PATH)
           || DOKOBIT_AUTH_NAVIGATION.matcher(url).matches()
-          || STATIC_I18N.matcher(url).matches()) {
+          || STATIC_I18N.matcher(url).matches()
+          || DOKOBIT_STATIC_TRANSLATIONS.matcher(url).matches()) {
         iterator.remove();
         removed = true;
       }
