@@ -49,6 +49,12 @@ public final class DisposableDividendSteps {
   private boolean sessionReused;
   private Path signedDocument;
 
+  void rememberSourceInstrument(String observedSourceInstrument) {
+    String value = safe(observedSourceInstrument).trim();
+    if (value.isBlank()) throw new AssertionError("Source instrument selection did not retain a value");
+    sourceInstrument = value;
+  }
+
   private Path contractPath() {
     String key = normalize(appType).replace(" ", "-");
     return Path.of("build", "reports", "disposable-" + key + "-application.properties");
